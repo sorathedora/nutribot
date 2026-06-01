@@ -2,6 +2,7 @@ import os
 import re
 import json
 import httpx
+import asyncio
 from datetime import datetime, timezone, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
@@ -18,8 +19,7 @@ TARGETS        = {"cal": 1850, "protein": 145, "carbs": 160, "fat": 55, "fiber":
 
 # ── Helpers ───────────────────────────────────────────────────
 def ist_now():
-    ist = timezone(timedelta(hours=5, minutes=30))
-    return datetime.now(ist)
+    return datetime.now(timezone(timedelta(hours=5, minutes=30)))
 
 def today_str():
     return ist_now().strftime("%Y-%m-%d")
@@ -56,7 +56,6 @@ def pct_bar(val, target, length=10):
 def format_today(meals: list) -> str:
     if not meals:
         return "Nothing logged today yet.\n\nSend a meal like:\n`chicken rice 400 35 45 8 2`\n_(name cal protein carbs fat fiber)_"
-
     totals = {k: 0 for k in TARGETS}
     lines = [f"📋 *Today — {today_str()}*\n"]
     for m in meals:
@@ -64,85 +63,51 @@ def format_today(meals: list) -> str:
         lines.append(f"  {round(m['cal'])}kcal · {round(m['protein'])}p · {round(m['carbs'])}c · {round(m['fat'])}f")
         for k in totals:
             totals[k] += float(m.get(k) or 0)
-
     lines.append("\n📊 *Progress:*")
     for k, label, unit in [("cal","Calories","kcal"),("protein","Protein","g"),("carbs","Carbs","g"),("fat","Fat","g"),("fiber","Fiber","g")]:
         v, t = round(totals[k]), TARGETS[k]
-        bar = pct_bar(v, t)
-        pct = min(round((v/t)*100), 100)
-        lines.append(f"`{label:<8}` {bar} {pct}%  {v}/{t}{unit}")
-
+        lines.append(f"`{label:<8}` {pct_bar(v,t)} {min(round((v/t)*100),100)}%  {v}/{t}{unit}")
     lines.append("\n🎯 *Remaining:*")
     for k, label, unit in [("cal","Cal","kcal"),("protein","Pro","g"),("carbs","Carbs","g"),("fat","Fat","g")]:
         rem = max(0, TARGETS[k] - totals[k])
-        icon = "✅" if rem == 0 else "·"
-        lines.append(f"{icon} {label}: {round(rem)}{unit}")
-
+        lines.append(f"{'✅' if rem==0 else '·'} {label}: {round(rem)}{unit}")
     return "\n".join(lines)
 
-# ── Parse message ─────────────────────────────────────────────
-# Accepted formats:
-#   chicken salad 320 38 12 12 2        → name cal pro carbs fat [fiber]
-#   chicken salad 320cal 38p 12c 12f 2fb
-#   320 38 12 12                        → no name, just numbers
 def parse_message(text: str):
     text = text.strip()
-
-    # Try to extract numbers — support tagged (38p, 12c) or plain positional
     tagged = re.findall(r'(\d+\.?\d*)\s*(kcal|cal|p|pro|protein|c|carb|carbs|f|fat|fb|fiber|fibre)?', text, re.IGNORECASE)
-
-    nums = {}
-    plain = []
+    nums, plain = {}, []
     for val, tag in tagged:
         val = float(val)
-        tag = tag.lower() if tag else ""
-        if tag in ("kcal", "cal"):        nums["cal"] = val
-        elif tag in ("p", "pro", "protein"): nums["protein"] = val
-        elif tag in ("c", "carb", "carbs"):  nums["carbs"] = val
-        elif tag in ("f", "fat"):            nums["fat"] = val
-        elif tag in ("fb", "fiber", "fibre"): nums["fiber"] = val
-        elif not tag:                        plain.append(val)
-
-    # Fill from positional if tagged incomplete
-    order = ["cal", "protein", "carbs", "fat", "fiber"]
-    for key in order:
+        t = tag.lower() if tag else ""
+        if t in ("kcal","cal"):              nums["cal"] = val
+        elif t in ("p","pro","protein"):     nums["protein"] = val
+        elif t in ("c","carb","carbs"):      nums["carbs"] = val
+        elif t in ("f","fat"):               nums["fat"] = val
+        elif t in ("fb","fiber","fibre"):    nums["fiber"] = val
+        elif not t:                          plain.append(val)
+    for key in ["cal","protein","carbs","fat","fiber"]:
         if key not in nums and plain:
             nums[key] = plain.pop(0)
-
     if not nums or "cal" not in nums:
         return None, "❓ Couldn't find macros. Format:\n`meal name 320 38 12 12 2`\n_(name cal protein carbs fat fiber)_"
-
-    # Extract name — everything that's not a number+tag
     name_part = re.sub(r'\b\d+\.?\d*\s*(kcal|cal|p|pro|protein|c|carb|carbs|f|fat|fb|fiber|fibre)?\b', '', text, flags=re.IGNORECASE)
-    name_part = re.sub(r'\s+', ' ', name_part).strip().strip('-').strip()
-    name = name_part if name_part else "Meal"
-
-    meal = {
-        "meal_date": today_str(),
-        "meal_time": now_time(),
-        "name":    name[:80],
-        "cal":     nums.get("cal", 0),
-        "protein": nums.get("protein", 0),
-        "carbs":   nums.get("carbs", 0),
-        "fat":     nums.get("fat", 0),
-        "fiber":   nums.get("fiber", 0),
-    }
-    return meal, None
+    name = re.sub(r'\s+', ' ', name_part).strip().strip('-').strip() or "Meal"
+    return {"meal_date": today_str(), "meal_time": now_time(), "name": name[:80],
+            "cal": nums.get("cal",0), "protein": nums.get("protein",0),
+            "carbs": nums.get("carbs",0), "fat": nums.get("fat",0), "fiber": nums.get("fiber",0)}, None
 
 # ── Handlers ──────────────────────────────────────────────────
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(update): return
     await update.message.reply_text(
         "👋 *NutriTrack Bot*\n\n"
-        "Log meals by sending:\n"
-        "`meal name  cal  protein  carbs  fat  fiber`\n\n"
+        "Log meals by sending:\n`meal name  cal  protein  carbs  fat  fiber`\n\n"
         "*Examples:*\n"
         "`chicken salad 320 38 12 12 2`\n"
         "`whey protein 120 25 3 2 0`\n"
-        "`2 boiled eggs 140 12 0 10 0`\n"
         "`oats banana 380 12p 60c 6f 4fb`\n\n"
-        "Claude gives you macros after every recipe — just copy the numbers here.\n\n"
-        "*/today* — view log + progress\n"
+        "*/today* — log + progress\n"
         "*/undo* — remove last meal",
         parse_mode="Markdown"
     )
@@ -171,11 +136,9 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(update): return
     text = update.message.text.strip()
     if not text: return
-
     meal, err = parse_message(text)
     if err:
         await update.message.reply_text(err, parse_mode="Markdown"); return
-
     summary = (
         f"*{meal['name']}*\n"
         f"`{round(meal['cal'])} kcal  ·  {round(meal['protein'])}g protein`\n"
@@ -196,11 +159,10 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         meal = json.loads(query.data)
         await db_insert(meal)
-        # Fetch updated totals
         meals = await db_fetch_today()
         totals = {k: sum(float(m.get(k) or 0) for m in meals) for k in TARGETS}
-        pro_pct = min(round((totals["protein"] / TARGETS["protein"]) * 100), 100)
-        cal_pct = min(round((totals["cal"] / TARGETS["cal"]) * 100), 100)
+        cal_pct = min(round((totals["cal"]/TARGETS["cal"])*100), 100)
+        pro_pct = min(round((totals["protein"]/TARGETS["protein"])*100), 100)
         await query.edit_message_text(
             f"✅ Logged: *{meal['name']}*\n"
             f"`{round(meal['cal'])} kcal · {round(meal['protein'])}g protein`\n\n"
@@ -210,7 +172,7 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await query.edit_message_text(f"⚠️ Failed: {e}")
 
-# ── Main ──────────────────────────────────────────────────────
+# ── Main — manual lifecycle, compatible with Python 3.14 ──────
 async def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
@@ -218,9 +180,24 @@ async def main():
     app.add_handler(CommandHandler("undo", undo_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(handle_callback))
-    print("NutriTrack bot running...")
-    await app.run_polling(drop_pending_updates=True)
+
+    print("NutriTrack bot starting...")
+    await app.initialize()
+    await app.start()
+    print("NutriTrack bot running. Polling for updates...")
+    await app.updater.start_polling(drop_pending_updates=True)
+
+    # Keep running until interrupted
+    stop_event = asyncio.Event()
+    try:
+        await stop_event.wait()
+    except (KeyboardInterrupt, SystemExit):
+        pass
+    finally:
+        print("Shutting down...")
+        await app.updater.stop()
+        await app.stop()
+        await app.shutdown()
 
 if __name__ == "__main__":
-    import asyncio
     asyncio.run(main())
