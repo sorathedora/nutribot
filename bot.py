@@ -46,6 +46,59 @@ def today_str():
 def now_time():
     return ist_now().strftime("%H:%M")
 
+def parse_time_from_text(text: str):
+    """Extract time and optional explicit date from text.
+    Supported: 'at 1:30pm', 'at 13:30', '@1:30pm'
+    Date modifiers (after the time): 'yesterday', 'DD Month', 'Month DD', 'YYYY-MM-DD'
+    Returns (cleaned_text, HH:MM_str_or_None, date_str_or_None).
+    """
+    time_pat = r'(?:at|@)\s*(\d{1,2}):(\d{2})\s*(am|pm)?'
+    m = re.search(time_pat, text, re.IGNORECASE)
+    if not m:
+        return text, None, None
+
+    hh, mm = int(m.group(1)), int(m.group(2))
+    ampm = (m.group(3) or "").lower()
+    if ampm == "pm" and hh != 12: hh += 12
+    elif ampm == "am" and hh == 12: hh = 0
+    if not (0 <= hh <= 23 and 0 <= mm <= 59):
+        return text, None, None
+
+    time_str = f"{hh:02d}:{mm:02d}"
+    after = text[m.end():].strip()
+    now = ist_now()
+
+    # Try to parse an explicit date from the text immediately after the time
+    date_str = None
+    date_consumed = 0
+
+    MONTHS = {"jan":1,"feb":2,"mar":3,"apr":4,"may":5,"jun":6,
+              "jul":7,"aug":8,"sep":9,"oct":10,"nov":11,"dec":12}
+
+    if re.match(r'yesterday\b', after, re.IGNORECASE):
+        date_str = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+        date_consumed = len(re.match(r'yesterday\b', after, re.IGNORECASE).group())
+    elif re.match(r'(\d{4})-(\d{2})-(\d{2})\b', after):
+        dm = re.match(r'(\d{4})-(\d{2})-(\d{2})\b', after)
+        date_str = dm.group()
+        date_consumed = len(dm.group())
+    elif re.match(r'(\d{1,2})\s+([a-z]{3,9})\b', after, re.IGNORECASE):
+        dm = re.match(r'(\d{1,2})\s+([a-z]{3,9})\b', after, re.IGNORECASE)
+        mon = MONTHS.get(dm.group(2).lower()[:3])
+        if mon:
+            date_str = now.replace(month=mon, day=int(dm.group(1))).strftime("%Y-%m-%d")
+            date_consumed = len(dm.group())
+    elif re.match(r'([a-z]{3,9})\s+(\d{1,2})\b', after, re.IGNORECASE):
+        dm = re.match(r'([a-z]{3,9})\s+(\d{1,2})\b', after, re.IGNORECASE)
+        mon = MONTHS.get(dm.group(1).lower()[:3])
+        if mon:
+            date_str = now.replace(month=mon, day=int(dm.group(2))).strftime("%Y-%m-%d")
+            date_consumed = len(dm.group())
+
+    remainder = after[date_consumed:].strip()
+    cleaned = (text[:m.start()] + " " + remainder).strip()
+    return cleaned, time_str, date_str or today_str()
+
 async def db_insert(meal: dict):
     async with httpx.AsyncClient() as c:
         r = await c.post(SUPABASE_API, headers={**HEADERS, "Prefer": "return=representation"}, json=meal, timeout=10)
@@ -94,6 +147,9 @@ def format_today(meals: list) -> str:
 
 def parse_message(text: str):
     text = text.strip()
+    text, custom_time, custom_date = parse_time_from_text(text)
+    meal_time = custom_time or now_time()
+    meal_date = custom_date or today_str()
     tagged = re.findall(r'(\d+\.?\d*)\s*(kcal|cal|p|pro|protein|c|carb|carbs|f|fat|fb|fiber|fibre)?', text, re.IGNORECASE)
     nums, plain = {}, []
     for val, tag in tagged:
@@ -112,7 +168,7 @@ def parse_message(text: str):
         return None, "❓ Couldn't find macros. Format:\n`meal name 320 38 12 12 2`\n_(name cal protein carbs fat fiber)_"
     name_part = re.sub(r'\b\d+\.?\d*\s*(kcal|cal|p|pro|protein|c|carb|carbs|f|fat|fb|fiber|fibre)?\b', '', text, flags=re.IGNORECASE)
     name = re.sub(r'\s+', ' ', name_part).strip().strip('-').strip() or "Meal"
-    return {"meal_date": today_str(), "meal_time": now_time(), "name": name[:80],
+    return {"meal_date": meal_date, "meal_time": meal_time, "name": name[:80],
             "cal": nums.get("cal",0), "protein": nums.get("protein",0),
             "carbs": nums.get("carbs",0), "fat": nums.get("fat",0),
             "fiber": nums.get("fiber",0)}, None
@@ -126,7 +182,12 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "*Examples:*\n"
         "`chicken salad 320 38 12 12 2`\n"
         "`whey protein 131 30 1 0.6 0`\n"
-        "`oats banana 380 12p 60c 6f 4fb`\n\n"
+        "`oats banana 380 12p 60c 6f 4fb`\n"
+        "`chicken salad 320 38 12 12 at 1:30pm`\n"
+        "`chicken salad 320 38 12 12 at 1:30pm yesterday`\n"
+        "`chicken salad 320 38 12 12 at 1:30pm 31 May`\n"
+        "`chicken salad 320 38 12 12 at 1:30pm 2026-05-31`\n\n"
+        "Omitting a date logs to today.\n\n"
         "*/today* — log + progress\n"
         "*/undo* — remove last meal",
         parse_mode="Markdown"
@@ -164,11 +225,13 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     pending_id = str(uuid.uuid4())[:8]
     PENDING[pending_id] = meal
 
+    is_yesterday = meal['meal_date'] != today_str()
+    date_label = f"{meal['meal_date']} (yesterday)" if is_yesterday else "today"
     summary = (
         f"*{meal['name']}*\n"
         f"`{round(meal['cal'])} kcal  ·  {round(meal['protein'])}g protein`\n"
         f"`{round(meal['carbs'])}g carbs  ·  {round(meal['fat'])}g fat  ·  {round(meal['fiber'])}g fiber`\n\n"
-        f"Log at {meal['meal_time']}?"
+        f"Log at *{meal['meal_time']}* on {date_label}?"
     )
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("✅ Log it", callback_data=f"log:{pending_id}"),
