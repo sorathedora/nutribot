@@ -4,6 +4,7 @@ import json
 import httpx
 import asyncio
 import threading
+import uuid
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timezone, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -20,18 +21,20 @@ SUPABASE_API   = f"{SUPABASE_URL}/rest/v1/meals"
 HEADERS        = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"}
 TARGETS        = {"cal": 1850, "protein": 145, "carbs": 160, "fat": 55, "fiber": 30}
 
-# ── Health check server (satisfies Render's port requirement) ─
+# In-memory store for pending meals (keyed by short ID)
+PENDING = {}
+
+# ── Health check server ───────────────────────────────────────
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"NutriTrack bot is running.")
     def log_message(self, *args):
-        pass  # silence access logs
+        pass
 
 def run_health_server():
-    server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
-    server.serve_forever()
+    HTTPServer(("0.0.0.0", PORT), HealthHandler).serve_forever()
 
 # ── Helpers ───────────────────────────────────────────────────
 def ist_now():
@@ -122,7 +125,7 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "Log meals by sending:\n`meal name  cal  protein  carbs  fat  fiber`\n\n"
         "*Examples:*\n"
         "`chicken salad 320 38 12 12 2`\n"
-        "`whey protein 120 25 3 2 0`\n"
+        "`whey protein 131 30 1 0.6 0`\n"
         "`oats banana 380 12p 60c 6f 4fb`\n\n"
         "*/today* — log + progress\n"
         "*/undo* — remove last meal",
@@ -156,6 +159,11 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     meal, err = parse_message(text)
     if err:
         await update.message.reply_text(err, parse_mode="Markdown"); return
+
+    # Store meal in memory, pass only short ID in callback_data
+    pending_id = str(uuid.uuid4())[:8]
+    PENDING[pending_id] = meal
+
     summary = (
         f"*{meal['name']}*\n"
         f"`{round(meal['cal'])} kcal  ·  {round(meal['protein'])}g protein`\n"
@@ -163,18 +171,28 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"Log at {meal['meal_time']}?"
     )
     keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Log it", callback_data=json.dumps(meal)),
-        InlineKeyboardButton("❌ Cancel", callback_data="cancel")
+        InlineKeyboardButton("✅ Log it", callback_data=f"log:{pending_id}"),
+        InlineKeyboardButton("❌ Cancel", callback_data=f"cancel:{pending_id}")
     ]])
     await update.message.reply_text(summary, parse_mode="Markdown", reply_markup=keyboard)
 
 async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    if query.data == "cancel":
-        await query.edit_message_text("❌ Cancelled."); return
+
+    action, pending_id = query.data.split(":", 1)
+
+    if action == "cancel":
+        PENDING.pop(pending_id, None)
+        await query.edit_message_text("❌ Cancelled.")
+        return
+
+    meal = PENDING.pop(pending_id, None)
+    if not meal:
+        await query.edit_message_text("⚠️ Session expired. Please send the meal again.")
+        return
+
     try:
-        meal = json.loads(query.data)
         await db_insert(meal)
         meals = await db_fetch_today()
         totals = {k: sum(float(m.get(k) or 0) for m in meals) for k in TARGETS}
@@ -187,14 +205,12 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
     except Exception as e:
-        await query.edit_message_text(f"⚠️ Failed: {e}")
+        await query.edit_message_text(f"⚠️ Failed to log: {e}")
 
 # ── Main ──────────────────────────────────────────────────────
 async def main():
-    # Start health check server in background thread
-    t = threading.Thread(target=run_health_server, daemon=True)
-    t.start()
-    print(f"Health server running on port {PORT}")
+    threading.Thread(target=run_health_server, daemon=True).start()
+    print(f"Health server on port {PORT}")
 
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
