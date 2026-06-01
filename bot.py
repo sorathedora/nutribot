@@ -3,6 +3,8 @@ import re
 import json
 import httpx
 import asyncio
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timezone, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
@@ -12,10 +14,24 @@ TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 SUPABASE_URL   = os.environ["SUPABASE_URL"]
 SUPABASE_KEY   = os.environ["SUPABASE_KEY"]
 ALLOWED_USER   = os.environ.get("ALLOWED_TELEGRAM_USER", "")
+PORT           = int(os.environ.get("PORT", 8080))
 
 SUPABASE_API   = f"{SUPABASE_URL}/rest/v1/meals"
 HEADERS        = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"}
 TARGETS        = {"cal": 1850, "protein": 145, "carbs": 160, "fat": 55, "fiber": 30}
+
+# ── Health check server (satisfies Render's port requirement) ─
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"NutriTrack bot is running.")
+    def log_message(self, *args):
+        pass  # silence access logs
+
+def run_health_server():
+    server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
+    server.serve_forever()
 
 # ── Helpers ───────────────────────────────────────────────────
 def ist_now():
@@ -80,12 +96,12 @@ def parse_message(text: str):
     for val, tag in tagged:
         val = float(val)
         t = tag.lower() if tag else ""
-        if t in ("kcal","cal"):              nums["cal"] = val
-        elif t in ("p","pro","protein"):     nums["protein"] = val
-        elif t in ("c","carb","carbs"):      nums["carbs"] = val
-        elif t in ("f","fat"):               nums["fat"] = val
-        elif t in ("fb","fiber","fibre"):    nums["fiber"] = val
-        elif not t:                          plain.append(val)
+        if t in ("kcal","cal"):           nums["cal"] = val
+        elif t in ("p","pro","protein"):  nums["protein"] = val
+        elif t in ("c","carb","carbs"):   nums["carbs"] = val
+        elif t in ("f","fat"):            nums["fat"] = val
+        elif t in ("fb","fiber","fibre"): nums["fiber"] = val
+        elif not t:                       plain.append(val)
     for key in ["cal","protein","carbs","fat","fiber"]:
         if key not in nums and plain:
             nums[key] = plain.pop(0)
@@ -95,7 +111,8 @@ def parse_message(text: str):
     name = re.sub(r'\s+', ' ', name_part).strip().strip('-').strip() or "Meal"
     return {"meal_date": today_str(), "meal_time": now_time(), "name": name[:80],
             "cal": nums.get("cal",0), "protein": nums.get("protein",0),
-            "carbs": nums.get("carbs",0), "fat": nums.get("fat",0), "fiber": nums.get("fiber",0)}, None
+            "carbs": nums.get("carbs",0), "fat": nums.get("fat",0),
+            "fiber": nums.get("fiber",0)}, None
 
 # ── Handlers ──────────────────────────────────────────────────
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -172,8 +189,13 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await query.edit_message_text(f"⚠️ Failed: {e}")
 
-# ── Main — manual lifecycle, compatible with Python 3.14 ──────
+# ── Main ──────────────────────────────────────────────────────
 async def main():
+    # Start health check server in background thread
+    t = threading.Thread(target=run_health_server, daemon=True)
+    t.start()
+    print(f"Health server running on port {PORT}")
+
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("today", today_cmd))
@@ -181,20 +203,17 @@ async def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
-    print("NutriTrack bot starting...")
     await app.initialize()
     await app.start()
-    print("NutriTrack bot running. Polling for updates...")
+    print("NutriTrack bot running...")
     await app.updater.start_polling(drop_pending_updates=True)
 
-    # Keep running until interrupted
     stop_event = asyncio.Event()
     try:
         await stop_event.wait()
     except (KeyboardInterrupt, SystemExit):
         pass
     finally:
-        print("Shutting down...")
         await app.updater.stop()
         await app.stop()
         await app.shutdown()
