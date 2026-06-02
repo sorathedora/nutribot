@@ -134,6 +134,9 @@ function Spinner(){
 
 function App(){
   const [tab,setTab]         = useState("today");
+  const [expanded,setExp]    = useState(()=>new Set([todayStr()]));
+  const toggleDay = d => setExp(prev=>{ const s=new Set(prev); s.has(d)?s.delete(d):s.add(d); return s; });
+  const [todayMeals,setTM]   = useState([]);
   const [viewDate,setVD]     = useState(todayStr());
   const [viewMeals,setVM]    = useState([]);
   const [history,setHist]    = useState([]);
@@ -316,15 +319,20 @@ function App(){
         ?h("div",{style:card},h(Empty,{icon:"📋",text:"Your full meal history will appear here."}))
         :Object.entries(byDate).sort((a,b)=>b[0].localeCompare(a[0])).map(([date,meals])=>{
             const dt=meals.reduce((a,m)=>({cal:a.cal+m.cal,protein:a.protein+m.protein}),{cal:0,protein:0});
-            return h("div",{key:date,style:card},
-              h("div",{style:{display:"flex",justifyContent:"space-between",marginBottom:10,alignItems:"center"}},
-                h("span",{style:{fontSize:13,fontWeight:600,color:D.text}},fmtDate(date)),
+            const isToday=date===todayStr(), open=expanded.has(date);
+            return h("div",{key:date,style:{...card,border:`0.5px solid ${isToday?D.accent:D.border}`,marginBottom:8}},
+              h("div",{onClick:()=>toggleDay(date),style:{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer",marginBottom:open?10:0}},
+                h("div",{style:{display:"flex",alignItems:"center",gap:8}},
+                  h("span",{style:{fontSize:13,color:D.muted,transition:"transform 0.2s",display:"inline-block",transform:open?"rotate(90deg)":"rotate(0deg)"}},"›"),
+                  h("span",{style:{fontSize:13,fontWeight:600,color:isToday?D.accent:D.text}},fmtDate(date)),
+                  isToday&&h("span",{style:{fontSize:10,color:D.accentText,background:D.accent,borderRadius:6,padding:"1px 7px",fontWeight:600}},"Today")
+                ),
                 h("div",{style:{display:"flex",gap:6}},
                   h(Pill,{label:`${Math.round(dt.cal)} kcal`,    color:"#7ab8f5",bg:"#0b1e35"}),
                   h(Pill,{label:`${Math.round(dt.protein)}g pro`,color:"#8ec94a",bg:"#141f07"})
                 )
               ),
-              ...meals.map((m,i)=>h(MealRow,{key:m.id||i,meal:m}))
+              open&&h("div",null,...meals.map((m,i)=>h(MealRow,{key:m.id||i,meal:m})))
             );
           })
     ),
@@ -332,23 +340,30 @@ function App(){
     // HISTORY
     !loading&&tab==="history"&&h("div",{className:"fade"},
       h("div",{style:card},
-        h("div",{style:sHead},"Last 7 days — protein target (≥80%)"),
-        h("div",{style:{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:7}},
-          ...last7.map(key=>{
-            const pro=(byDate[key]||[]).reduce((s,m)=>s+m.protein,0);
-            const hit=pro>=TARGETS.protein*0.8, isToday=key===todayStr();
-            return h("div",{key,style:{
-              aspectRatio:"1",borderRadius:9,background:hit?"#1b3606":D.hint,
-              border:isToday?`1.5px solid ${D.accent}`:`0.5px solid ${D.border}`,
-              display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
-              fontSize:10,color:hit?D.accent:D.muted,gap:2
-            }},
-              h("span",null,new Date(key+"T12:00:00").toLocaleDateString("en-IN",{weekday:"short"}).slice(0,2)),
-              hit&&h("span",{style:{fontSize:14}},"✓"),
-              !hit&&pro>0&&h("span",{style:{fontSize:9,color:"#444"}},Math.round(pro)+"g")
-            );
-          })
-        )
+        h("div",{style:sHead},"Last 7 days — protein"),
+        ...last7.map(key=>{
+          const pro=Math.round((byDate[key]||[]).reduce((s,m)=>s+m.protein,0));
+          const pct=Math.min((pro/TARGETS.protein)*100,100);
+          const hit=pro>=TARGETS.protein*0.8, isToday=key===todayStr(), hasData=pro>0;
+          const barColor=hit?"#8ec94a":"#3a3a36";
+          return h("div",{key,style:{display:"flex",alignItems:"center",gap:10,marginBottom:10}},
+            h("div",{style:{width:52,flexShrink:0}},
+              h("span",{style:{fontSize:11,color:isToday?D.accent:D.muted,fontWeight:isToday?600:400}},
+                new Date(key+"T12:00:00").toLocaleDateString("en-IN",{weekday:"short"}))
+            ),
+            h("div",{style:{flex:1,height:6,background:D.hint,borderRadius:3,overflow:"hidden"}},
+              h("div",{style:{width:`${pct}%`,height:"100%",background:barColor,borderRadius:3,transition:"width 0.6s ease"}})
+            ),
+            h("div",{style:{width:72,flexShrink:0,textAlign:"right",display:"flex",alignItems:"center",justifyContent:"flex-end",gap:5}},
+              hasData
+                ? h(Fragment,null,
+                    h("span",{style:{fontSize:11,color:D.muted}},`${pro}/${TARGETS.protein}g`),
+                    hit&&h("span",{style:{fontSize:11,color:"#8ec94a"}},"✓")
+                  )
+                : h("span",{style:{fontSize:11,color:"#2a2a26"}},"—")
+            )
+          );
+        })
       ),
       h("div",{style:card},
         h("div",{style:sHead},"7-day average"),
