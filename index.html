@@ -33,7 +33,13 @@ const D         = { bg:"#0f0f0d", surface:"#181816", card:"#1e1e1b", border:"#2a
 
 function todayStr(){ return new Date().toISOString().split("T")[0]; }
 function fmtDate(d){ return new Date(d+"T12:00:00").toLocaleDateString("en-IN",{weekday:"short",day:"numeric",month:"short"}); }
-function fmtTime(){ return new Date().toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"}); }
+function fmtTime(){ return new Date().toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit",hour12:true}); }
+function displayTime(t){
+  if(!t) return "";
+  if(/[AP]M/i.test(t)) return t;
+  const [hh,mm] = t.split(":").map(Number);
+  return `${hh%12||12}:${String(mm).padStart(2,"0")} ${hh>=12?"PM":"AM"}`;
+}
 
 async function apiFetch(from, to){
   const r = await fetch(`${URL_BASE}/meals?meal_date=gte.${from}&meal_date=lte.${to}&order=logged_at.asc`, { headers: HDRS });
@@ -102,7 +108,7 @@ function MealRow({meal}){
   return h("div",{style:{borderBottom:`0.5px solid ${D.border}`,padding:"12px 0"}},
     h("div",{style:{display:"flex",justifyContent:"space-between",marginBottom:7}},
       h("span",{style:{fontSize:14,fontWeight:500,color:D.text}},meal.name),
-      h("span",{style:{fontSize:11,color:D.muted,flexShrink:0,marginLeft:8}},meal.meal_time)
+      h("span",{style:{fontSize:11,color:D.muted,flexShrink:0,marginLeft:8}},displayTime(meal.meal_time))
     ),
     h("div",{style:{display:"flex",gap:5,flexWrap:"wrap"}},
       h(Pill,{label:`${Math.round(meal.cal)} kcal`,      color:"#7ab8f5",bg:"#0b1e35"}),
@@ -131,11 +137,15 @@ function App(){
   const [expanded,setExp]    = useState(()=>new Set([todayStr()]));
   const toggleDay = d => setExp(prev=>{ const s=new Set(prev); s.has(d)?s.delete(d):s.add(d); return s; });
   const [todayMeals,setTM]   = useState([]);
+  const [viewDate,setVD]     = useState(todayStr());
+  const [viewMeals,setVM]    = useState([]);
   const [history,setHist]    = useState([]);
   const [loading,setLoading] = useState(true);
   const [error,setError]     = useState(null);
   const [seeding,setSeeding] = useState(false);
   const [tick,setTick]       = useState(0);
+
+  function goDate(d){ const dt=new Date(viewDate+"T12:00:00"); dt.setDate(dt.getDate()+d); const s=dt.toISOString().split("T")[0]; if(s<=todayStr()) setVD(s); }
 
   const refresh = useCallback(()=>setTick(t=>t+1),[]);
   window.__refresh = refresh;
@@ -144,15 +154,15 @@ function App(){
     (async()=>{
       setLoading(true); setError(null);
       try{
-        const t = await apiFetch(todayStr(), todayStr());
-        setTM(t);
+        const t = await apiFetch(viewDate, viewDate);
+        setVM(t);
         const from = new Date(); from.setDate(from.getDate()-29);
         const h = await apiFetch(from.toISOString().split("T")[0], todayStr());
         setHist(h);
       } catch(e){ setError(e.message); }
       finally{ setLoading(false); }
     })();
-  },[tick]);
+  },[tick, viewDate]);
 
   async function seedToday(){
     setSeeding(true);
@@ -164,7 +174,7 @@ function App(){
     finally{ setSeeding(false); }
   }
 
-  const totals = todayMeals.reduce(
+  const totals = viewMeals.reduce(
     (a,m)=>({cal:a.cal+m.cal, protein:a.protein+m.protein, carbs:a.carbs+m.carbs, fat:a.fat+m.fat, fiber:a.fiber+(m.fiber||0)}),
     {cal:0,protein:0,carbs:0,fat:0,fiber:0}
   );
@@ -196,14 +206,14 @@ function App(){
       h("div",{style:{fontSize:10,letterSpacing:"0.14em",color:D.muted,textTransform:"uppercase",marginBottom:5}},"NutriTrack"),
       h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:10}},
         h("div",null,
-          h("div",{style:{fontSize:21,fontWeight:600,color:D.text}}, new Date().toLocaleDateString("en-IN",{weekday:"long",day:"numeric",month:"long"})),
+          h("div",{style:{fontSize:21,fontWeight:600,color:D.text}}, new Date(viewDate+"T12:00:00").toLocaleDateString("en-IN",{weekday:"long",day:"numeric",month:"long"})),
           h("div",{style:{fontSize:12,color:D.muted,marginTop:3}},"1,850 kcal · 145g protein · 160g carbs · 55g fat")
         ),
         h("div",{style:{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}},
           h("div",{style:{background:D.card,border:`0.5px solid ${D.border}`,borderRadius:20,padding:"5px 13px",fontSize:12,color:D.text,display:"flex",gap:6,alignItems:"center"}},
             "🔥 ",h("strong",{style:{fontWeight:600}},streak)," ",h("span",{style:{color:D.muted}},"day streak")
           ),
-          todayMeals.length===0&&!loading&&h("button",{onClick:seedToday,disabled:seeding,
+          viewMeals.length===0&&!loading&&viewDate===todayStr()&&h("button",{onClick:seedToday,disabled:seeding,
             style:{background:D.accent,color:D.accentText,border:"none",borderRadius:20,padding:"6px 15px",fontSize:12,fontWeight:600,opacity:seeding?0.6:1}},
             seeding?"Logging...":"↑ Log today's meals"),
           h("button",{onClick:refresh,style:{background:"transparent",color:D.muted,border:`0.5px solid ${D.border}`,borderRadius:20,padding:"5px 13px",fontSize:13}},"↻")
@@ -235,6 +245,13 @@ function App(){
 
     // TODAY
     !loading&&tab==="today"&&h("div",{className:"fade"},
+      h("div",{style:{display:"flex",alignItems:"center",gap:8,marginBottom:12}},
+        h("button",{onClick:()=>goDate(-1),style:{background:"transparent",border:`0.5px solid ${D.border}`,color:D.muted,borderRadius:8,padding:"4px 13px",fontSize:16,lineHeight:1}},"‹"),
+        h("input",{type:"date",value:viewDate,max:todayStr(),onChange:e=>e.target.value&&setVD(e.target.value),
+          style:{background:D.card,border:`0.5px solid ${D.border}`,color:D.text,borderRadius:8,padding:"5px 10px",fontSize:12,fontFamily:"inherit",flex:1,colorScheme:"dark"}}),
+        viewDate<todayStr()&&h("button",{onClick:()=>setVD(todayStr()),style:{fontSize:11,padding:"5px 12px",borderRadius:8,background:D.accent,color:D.accentText,border:"none",fontWeight:600,whiteSpace:"nowrap"}},"Today"),
+        h("button",{onClick:()=>goDate(1),disabled:viewDate>=todayStr(),style:{background:"transparent",border:`0.5px solid ${D.border}`,color:viewDate>=todayStr()?D.hint:D.muted,borderRadius:8,padding:"4px 13px",fontSize:16,lineHeight:1}},"›")
+      ),
       h("div",{style:{...card,padding:"1.25rem 1rem"}},
         h("div",{style:{display:"flex",justifyContent:"space-around",gap:16,marginBottom:"1.5rem"}},
           ...[
@@ -290,9 +307,9 @@ function App(){
       ),
       h("div",{style:card},
         h("div",{style:sHead},"Today's meals"),
-        todayMeals.length===0
-          ?h(Empty,{icon:"🥗",text:"No meals logged yet. Tell Claude what you ate."})
-          :todayMeals.map((m,i)=>h(MealRow,{key:m.id||i,meal:m}))
+        viewMeals.length===0
+          ?h(Empty,{icon:"🥗",text:viewDate===todayStr()?"No meals logged yet. Tell Claude what you ate.":"No meals logged on this day."})
+          :viewMeals.map((m,i)=>h(MealRow,{key:m.id||i,meal:m}))
       )
     ),
 
