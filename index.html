@@ -189,9 +189,23 @@ function App(){
     if(byDate[k]?.length>0) streak++; else if(i>0) break;
   }
 
+  const PROTEIN_KEYS=[
+    "chicken","eggs","egg","paneer","whey","fish","mutton","lamb","beef","pork","turkey",
+    "tofu","tempeh","dal","lentil","lentils","chickpea","chickpeas","chole","rajma","moong",
+    "tuna","salmon","prawn","prawns","shrimp","crab","cottage cheese","curd","yogurt","dahi",
+    "milk","soy","protein","oats","quinoa","peanut","peanuts","almond","almonds","cheese"
+  ];
+  function proteinSource(name){
+    const lower=name.toLowerCase();
+    return PROTEIN_KEYS.find(k=>new RegExp(`\\b${k}\\b`).test(lower))||null;
+  }
   const sources={};
-  history.forEach(m=>{ const k=m.name.split(" ").slice(0,2).join(" "); sources[k]=(sources[k]||0)+(m.protein||0); });
-  const topSources=Object.entries(sources).sort((a,b)=>b[1]-a[1]).slice(0,6);
+  history.forEach(m=>{
+    const k=proteinSource(m.name);
+    if(k){ const label=k.charAt(0).toUpperCase()+k.slice(1); sources[label]=(sources[label]||0)+(m.protein||0); }
+    else { sources["Other"]=(sources["Other"]||0)+(m.protein||0); }
+  });
+  const topSources=Object.entries(sources).filter(([k])=>k!=="Other").sort((a,b)=>b[1]-a[1]).slice(0,6);
 
   const last7=Array.from({length:7},(_,i)=>{ const d=new Date(); d.setDate(d.getDate()-(6-i)); return d.toISOString().split("T")[0]; });
 
