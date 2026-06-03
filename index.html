@@ -31,7 +31,7 @@ const HDRS      = { "Content-Type":"application/json", "apikey": ANON_KEY, "Auth
 const TARGETS   = { cal:1850, protein:145, carbs:160, fat:55, fiber:30 };
 const D         = { bg:"#0f0f0d", surface:"#181816", card:"#1e1e1b", border:"#2a2a26", text:"#f0efe8", muted:"#666660", hint:"#232320", accent:"#c8f060", accentText:"#1a2a04" };
 
-function todayStr(){ return new Date().toISOString().split("T")[0]; }
+function todayStr(){ const now=new Date(); return new Date(now.getTime()+5.5*60*60*1000).toISOString().split("T")[0]; }
 function fmtDate(d){ return new Date(d+"T12:00:00").toLocaleDateString("en-IN",{weekday:"short",day:"numeric",month:"short"}); }
 function fmtTime(){ return new Date().toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit",hour12:true}); }
 function displayTime(t){
@@ -195,17 +195,33 @@ function App(){
     "tuna","salmon","prawn","prawns","shrimp","crab","cottage cheese","curd","yogurt","dahi",
     "milk","soy","protein","oats","quinoa","peanut","peanuts","almond","almonds","cheese"
   ];
+  const NORMALIZE={"eggs":"Egg","egg":"Egg","lentils":"Lentil","lentil":"Lentil",
+    "chickpeas":"Chickpea","chickpea":"Chickpea","prawns":"Prawn","peanuts":"Peanut","almonds":"Almond"};
   function proteinSource(name){
     const lower=name.toLowerCase();
-    return PROTEIN_KEYS.find(k=>new RegExp(`\\b${k}\\b`).test(lower))||null;
+    const k=PROTEIN_KEYS.find(k=>new RegExp(`\\b${k}\\b`).test(lower))||null;
+    if(!k) return null;
+    return NORMALIZE[k]||(k.charAt(0).toUpperCase()+k.slice(1));
   }
   const sources={};
+  const daySourceMap={}, dayTotalMap={};
   history.forEach(m=>{
-    const k=proteinSource(m.name);
-    if(k){ const label=k.charAt(0).toUpperCase()+k.slice(1); sources[label]=(sources[label]||0)+(m.protein||0); }
-    else { sources["Other"]=(sources["Other"]||0)+(m.protein||0); }
+    const label=proteinSource(m.name);
+    sources[label||"Other"]=(sources[label||"Other"]||0)+(m.protein||0);
+    const d=m.meal_date;
+    if(!daySourceMap[d]) daySourceMap[d]={};
+    dayTotalMap[d]=(dayTotalMap[d]||0)+(m.protein||0);
+    if(label) daySourceMap[d][label]=(daySourceMap[d][label]||0)+(m.protein||0);
   });
+  const grandTotal=Object.values(sources).reduce((s,v)=>s+v,0);
   const topSources=Object.entries(sources).filter(([k])=>k!=="Other").sort((a,b)=>b[1]-a[1]).slice(0,6);
+  const avgDayPct={};
+  topSources.forEach(([label])=>{
+    const active=Object.keys(daySourceMap).filter(d=>daySourceMap[d][label]&&dayTotalMap[d]>0);
+    avgDayPct[label]=active.length
+      ? Math.round(active.reduce((s,d)=>s+(daySourceMap[d][label]/dayTotalMap[d])*100,0)/active.length)
+      : 0;
+  });
 
   const last7=Array.from({length:7},(_,i)=>{ const d=new Date(); d.setDate(d.getDate()-(6-i)); return d.toISOString().split("T")[0]; });
 
@@ -416,12 +432,24 @@ function App(){
           ?h(Empty,{icon:"🍗",text:"Log a few meals to see your top sources."})
           :topSources.map(([name,val])=>
             h("div",{key:name,style:{display:"flex",alignItems:"center",gap:10,marginBottom:11}},
-              h("span",{style:{fontSize:12,color:D.text,width:150,flexShrink:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},name),
+              h("span",{style:{fontSize:12,color:D.text,width:110,flexShrink:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},name),
               h("div",{style:{flex:1,height:6,background:D.hint,borderRadius:3,overflow:"hidden"}},
                 h("div",{style:{width:`${Math.round((val/topSources[0][1])*100)}%`,height:"100%",background:"#8ec94a",borderRadius:3}})),
-              h("span",{style:{fontSize:11,color:D.muted,width:40,textAlign:"right"}},Math.round(val)+"g")
+              h("span",{style:{fontSize:11,color:D.muted,width:80,textAlign:"right",flexShrink:0}},
+                `${Math.round(val)}g · ${grandTotal>0?Math.round((val/grandTotal)*100):0}%`)
             )
           )
+      ),
+      topSources.length>0&&h("div",{style:card},
+        h("div",{style:sHead},"Avg daily share — on days eaten"),
+        topSources.map(([name])=>
+          h("div",{key:name,style:{display:"flex",alignItems:"center",gap:10,marginBottom:11}},
+            h("span",{style:{fontSize:12,color:D.text,width:110,flexShrink:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},name),
+            h("div",{style:{flex:1,height:6,background:D.hint,borderRadius:3,overflow:"hidden"}},
+              h("div",{style:{width:`${avgDayPct[name]}%`,height:"100%",background:"#c8a84a",borderRadius:3}})),
+            h("span",{style:{fontSize:11,color:D.muted,width:80,textAlign:"right",flexShrink:0}},`${avgDayPct[name]}% of day`)
+          )
+        )
       ),
       h("div",{style:card},
         h("div",{style:sHead},"Meal timing pattern"),
