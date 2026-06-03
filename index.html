@@ -31,7 +31,12 @@ const HDRS      = { "Content-Type":"application/json", "apikey": ANON_KEY, "Auth
 const TARGETS   = { cal:1850, protein:145, carbs:160, fat:55, fiber:30 };
 const D         = { bg:"#0f0f0d", surface:"#181816", card:"#1e1e1b", border:"#2a2a26", text:"#f0efe8", muted:"#666660", hint:"#232320", accent:"#c8f060", accentText:"#1a2a04" };
 
-function todayStr(){ return new Date().toISOString().split("T")[0]; }
+function todayStr(){
+  const now = new Date();
+  const ist = new Date(now.getTime() + 5.5*60*60*1000);
+  if(ist.getUTCHours() < 4) ist.setUTCDate(ist.getUTCDate() - 1);
+  return ist.toISOString().split("T")[0];
+}
 function fmtDate(d){ return new Date(d+"T12:00:00").toLocaleDateString("en-IN",{weekday:"short",day:"numeric",month:"short"}); }
 function fmtTime(){ return new Date().toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit",hour12:true}); }
 function displayTime(t){

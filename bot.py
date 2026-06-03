@@ -41,7 +41,10 @@ def ist_now():
     return datetime.now(timezone(timedelta(hours=5, minutes=30)))
 
 def today_str():
-    return ist_now().strftime("%Y-%m-%d")
+    now = ist_now()
+    if now.hour < 4:
+        now = now - timedelta(days=1)
+    return now.strftime("%Y-%m-%d")
 
 def now_time():
     return ist_now().strftime("%H:%M")
