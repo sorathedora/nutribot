@@ -1,6 +1,5 @@
 import os
 import re
-import json
 import httpx
 import asyncio
 import threading
@@ -41,10 +40,40 @@ def ist_now():
     return datetime.now(timezone(timedelta(hours=5, minutes=30)))
 
 def today_str():
-    return ist_now().strftime("%Y-%m-%d")
+    """Current date under the 4am IST day boundary."""
+    now = ist_now()
+    if now.hour < 4:
+        now = now - timedelta(days=1)
+    return now.strftime("%Y-%m-%d")
+
+def yesterday_str():
+    """Yesterday under the 4am IST day boundary."""
+    now = ist_now()
+    if now.hour < 4:
+        now = now - timedelta(days=1)
+    return (now - timedelta(days=1)).strftime("%Y-%m-%d")
 
 def now_time():
     return ist_now().strftime("%H:%M")
+
+def fmt12(t: str) -> str:
+    """Convert HH:MM to 12h format e.g. 1:30 PM."""
+    try:
+        hh, mm = map(int, t.split(":"))
+        period = "AM" if hh < 12 else "PM"
+        hh12 = hh % 12 or 12
+        return f"{hh12}:{mm:02d} {period}"
+    except Exception:
+        return t
+
+def human_date(date_str: str) -> str:
+    """today / yesterday / Mon 02 Jun."""
+    if date_str == today_str():     return "today"
+    if date_str == yesterday_str(): return "yesterday"
+    try:
+        return datetime.strptime(date_str, "%Y-%m-%d").strftime("%a %d %b")
+    except Exception:
+        return date_str
 
 def parse_time_from_text(text: str):
     """Extract time and optional explicit date from text.
@@ -68,7 +97,6 @@ def parse_time_from_text(text: str):
     after = text[m.end():].strip()
     now = ist_now()
 
-    # Try to parse an explicit date from the text immediately after the time
     date_str = None
     date_consumed = 0
 
@@ -103,15 +131,28 @@ def parse_time_from_text(text: str):
     cleaned = (text[:m.start()] + " " + remainder).strip()
     return cleaned, time_str, date_str or today_str()
 
+# ── DB ────────────────────────────────────────────────────────
 async def db_insert(meal: dict):
     async with httpx.AsyncClient() as c:
         r = await c.post(SUPABASE_API, headers={**HEADERS, "Prefer": "return=representation"}, json=meal, timeout=10)
         r.raise_for_status()
         return r.json()
 
-async def db_fetch_today():
+async def db_fetch_date(date_str: str):
     async with httpx.AsyncClient() as c:
-        r = await c.get(f"{SUPABASE_API}?meal_date=eq.{today_str()}&order=logged_at.asc", headers=HEADERS, timeout=10)
+        r = await c.get(f"{SUPABASE_API}?meal_date=eq.{date_str}&order=logged_at.asc", headers=HEADERS, timeout=10)
+        r.raise_for_status()
+        return r.json()
+
+async def db_fetch_today():
+    return await db_fetch_date(today_str())
+
+async def db_fetch_range(from_date: str, to_date: str):
+    async with httpx.AsyncClient() as c:
+        r = await c.get(
+            f"{SUPABASE_API}?meal_date=gte.{from_date}&meal_date=lte.{to_date}&order=meal_date.asc,logged_at.asc",
+            headers=HEADERS, timeout=10
+        )
         r.raise_for_status()
         return r.json()
 
@@ -120,6 +161,7 @@ async def db_delete(meal_id: str):
         r = await c.delete(f"{SUPABASE_API}?id=eq.{meal_id}", headers={**HEADERS, "Prefer": "return=minimal"}, timeout=10)
         r.raise_for_status()
 
+# ── Formatting ────────────────────────────────────────────────
 def is_allowed(update: Update) -> bool:
     if not ALLOWED_USER:
         return True
@@ -129,24 +171,27 @@ def pct_bar(val, target, length=10):
     filled = min(int((val / target) * length), length)
     return "▓" * filled + "░" * (length - filled)
 
-def format_today(meals: list) -> str:
+def format_day(meals: list, date_str: str, label: str) -> str:
+    cap = label.capitalize()
     if not meals:
-        return "Nothing logged today yet.\n\nSend a meal like:\n`chicken rice 400 35 45 8 2`\n_(name cal protein carbs fat fiber)_"
+        if label == "today":
+            return "Nothing logged today yet.\n\nSend a meal like:\n`chicken rice 400 35 45 8 2`\n_(name cal protein carbs fat fiber)_"
+        return f"Nothing logged {label}."
     totals = {k: 0 for k in TARGETS}
-    lines = [f"📋 *Today — {today_str()}*\n"]
+    lines = [f"📋 *{cap} — {date_str}*\n"]
     for m in meals:
-        lines.append(f"• *{m['name']}* `{m['meal_time']}`")
+        lines.append(f"• *{m['name']}* `{fmt12(m['meal_time'])}`")
         lines.append(f"  {round(m['cal'])}kcal · {round(m['protein'])}p · {round(m['carbs'])}c · {round(m['fat'])}f")
         for k in totals:
             totals[k] += float(m.get(k) or 0)
     lines.append("\n📊 *Progress:*")
-    for k, label, unit in [("cal","Calories","kcal"),("protein","Protein","g"),("carbs","Carbs","g"),("fat","Fat","g"),("fiber","Fiber","g")]:
+    for k, lbl, unit in [("cal","Calories","kcal"),("protein","Protein","g"),("carbs","Carbs","g"),("fat","Fat","g"),("fiber","Fiber","g")]:
         v, t = round(totals[k]), TARGETS[k]
-        lines.append(f"`{label:<8}` {pct_bar(v,t)} {min(round((v/t)*100),100)}%  {v}/{t}{unit}")
+        lines.append(f"`{lbl:<8}` {pct_bar(v,t)} {min(round((v/t)*100),100)}%  {v}/{t}{unit}")
     lines.append("\n🎯 *Remaining:*")
-    for k, label, unit in [("cal","Cal","kcal"),("protein","Pro","g"),("carbs","Carbs","g"),("fat","Fat","g")]:
+    for k, lbl, unit in [("cal","Cal","kcal"),("protein","Pro","g"),("carbs","Carbs","g"),("fat","Fat","g")]:
         rem = max(0, TARGETS[k] - totals[k])
-        lines.append(f"{'✅' if rem==0 else '·'} {label}: {round(rem)}{unit}")
+        lines.append(f"{'✅' if rem==0 else '·'} {lbl}: {round(rem)}{unit}")
     return "\n".join(lines)
 
 def parse_message(text: str):
@@ -205,9 +250,14 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "`chicken salad 320 38 12 12 at 1:30pm yesterday`\n"
         "`chicken salad 320 38 12 12 at 1:30pm 31 May`\n"
         "`chicken salad 320 38 12 12 at 1:30pm 2026-05-31`\n\n"
-        "Omitting a date logs to today.\n\n"
-        "*/today* — log + progress\n"
-        "*/undo* — remove last meal",
+        "Omitting a date logs to today. Logging between midnight–4am defaults to the previous day.\n\n"
+        "*/today* — today's meals + progress\n"
+        "*/yesterday* — yesterday's meals + progress\n"
+        "*/week* — last 7 days summary + averages\n"
+        "*/streak* — current logging streak\n"
+        "*/targets* — your daily macro targets\n"
+        "*/delete* — remove a meal from today\n"
+        "*/undo* — remove the last logged meal",
         parse_mode="Markdown"
     )
 
@@ -215,7 +265,130 @@ async def today_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(update): return
     try:
         meals = await db_fetch_today()
-        await update.message.reply_text(format_today(meals), parse_mode="Markdown")
+        await update.message.reply_text(format_day(meals, today_str(), "today"), parse_mode="Markdown")
+    except Exception as e:
+        await update.message.reply_text(f"⚠️ {e}")
+
+async def yesterday_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update): return
+    try:
+        yd = yesterday_str()
+        meals = await db_fetch_date(yd)
+        await update.message.reply_text(format_day(meals, yd, "yesterday"), parse_mode="Markdown")
+    except Exception as e:
+        await update.message.reply_text(f"⚠️ {e}")
+
+async def week_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update): return
+    try:
+        today = today_str()
+        today_dt = datetime.strptime(today, "%Y-%m-%d")
+        from_date = (today_dt - timedelta(days=6)).strftime("%Y-%m-%d")
+        meals = await db_fetch_range(from_date, today)
+
+        by_date: dict[str, list] = {}
+        for m in meals:
+            by_date.setdefault(m["meal_date"], []).append(m)
+
+        days = [(today_dt - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(6, -1, -1)]
+        yd = yesterday_str()
+
+        lines = ["📅 *Last 7 days*\n"]
+        totals_list = []
+
+        for d in days:
+            d_meals = by_date.get(d, [])
+            dlabel = datetime.strptime(d, "%Y-%m-%d").strftime("%a %d %b")
+            suffix = " ← today" if d == today else (" ← yesterday" if d == yd else "")
+            if not d_meals:
+                lines.append(f"░ `{dlabel}` — not logged{suffix}")
+                continue
+            tot = {k: round(sum(float(m.get(k) or 0) for m in d_meals)) for k in TARGETS}
+            totals_list.append(tot)
+            hit = "✅" if tot["cal"] >= TARGETS["cal"] * 0.9 and tot["protein"] >= TARGETS["protein"] * 0.9 else "·"
+            lines.append(f"{hit} `{dlabel}` {tot['cal']} kcal · {tot['protein']}g pro{suffix}")
+
+        if totals_list:
+            n = len(totals_list)
+            lines.append(f"\n📊 *Averages ({n} logged day{'s' if n>1 else ''}):*")
+            for k, lbl, unit in [("cal","Cal","kcal"),("protein","Pro","g"),("carbs","Carbs","g"),("fat","Fat","g"),("fiber","Fiber","g")]:
+                avg = round(sum(t[k] for t in totals_list) / n)
+                pct = min(round((avg / TARGETS[k]) * 100), 100)
+                lines.append(f"`{lbl:<6}` {pct_bar(avg, TARGETS[k])} {pct}%  {avg}/{TARGETS[k]}{unit}")
+
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+    except Exception as e:
+        await update.message.reply_text(f"⚠️ {e}")
+
+async def streak_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update): return
+    try:
+        today = today_str()
+        today_dt = datetime.strptime(today, "%Y-%m-%d")
+        from_date = (today_dt - timedelta(days=89)).strftime("%Y-%m-%d")
+        meals = await db_fetch_range(from_date, today)
+
+        logged_dates = set(m["meal_date"] for m in meals)
+
+        streak = 0
+        d = today_dt
+        while d.strftime("%Y-%m-%d") in logged_dates:
+            streak += 1
+            d -= timedelta(days=1)
+
+        if streak == 0:
+            msg = "📉 *No streak yet*\n\nNothing logged today. Log a meal to start!"
+        elif streak == 1:
+            msg = "🔥 *Streak: 1 day*\n\nLogged today — keep it going!"
+        elif streak < 7:
+            msg = f"🔥 *Streak: {streak} days*\n\n{7 - streak} more to hit a week streak!"
+        elif streak < 30:
+            weeks = streak // 7
+            msg = f"🔥 *Streak: {streak} days*\n\n{'🏆 ' if weeks >= 1 else ''}{weeks} week{'s' if weeks>1 else ''} strong!"
+        else:
+            msg = f"🏆 *Streak: {streak} days*\n\nAbsolute consistency."
+
+        await update.message.reply_text(msg, parse_mode="Markdown")
+    except Exception as e:
+        await update.message.reply_text(f"⚠️ {e}")
+
+async def targets_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update): return
+    lines = [
+        "🎯 *Daily targets*\n",
+        f"`Calories` {TARGETS['cal']} kcal",
+        f"`Protein ` {TARGETS['protein']}g",
+        f"`Carbs   ` {TARGETS['carbs']}g",
+        f"`Fat     ` {TARGETS['fat']}g",
+        f"`Fiber   ` {TARGETS['fiber']}g",
+    ]
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+async def delete_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update): return
+    try:
+        meals = await db_fetch_today()
+        if not meals:
+            await update.message.reply_text("Nothing logged today to delete."); return
+
+        if not ctx.args:
+            lines = [f"🗑 *Today's meals — use /delete N to remove:*\n"]
+            for i, m in enumerate(meals, 1):
+                lines.append(f"{i}. *{m['name']}* `{fmt12(m['meal_time'])}` — {round(m['cal'])} kcal")
+            await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+            return
+
+        try:
+            n = int(ctx.args[0])
+        except ValueError:
+            await update.message.reply_text("Usage: `/delete N` — e.g. `/delete 2`", parse_mode="Markdown"); return
+
+        if not (1 <= n <= len(meals)):
+            await update.message.reply_text(f"No meal #{n}. Today has {len(meals)} logged."); return
+
+        target = meals[n - 1]
+        await db_delete(target["id"])
+        await update.message.reply_text(f"🗑 Removed #{n}: *{target['name']}*", parse_mode="Markdown")
     except Exception as e:
         await update.message.reply_text(f"⚠️ {e}")
 
@@ -239,22 +412,15 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if err:
         await update.message.reply_text(err, parse_mode="Markdown"); return
 
-    # Store meal in memory, pass only short ID in callback_data
     pending_id = str(uuid.uuid4())[:8]
     PENDING[pending_id] = meal
 
-    yesterday_str = (ist_now() - timedelta(days=1)).strftime("%Y-%m-%d")
-    if meal['meal_date'] == today_str():
-        date_label = "today"
-    elif meal['meal_date'] == yesterday_str:
-        date_label = "yesterday"
-    else:
-        date_label = meal['meal_date']
+    dl = human_date(meal['meal_date'])
     summary = (
         f"*{meal['name']}*\n"
         f"`{round(meal['cal'])} kcal  ·  {round(meal['protein'])}g protein`\n"
         f"`{round(meal['carbs'])}g carbs  ·  {round(meal['fat'])}g fat  ·  {round(meal['fiber'])}g fiber`\n\n"
-        f"Log at *{meal['meal_time']}* on {date_label}?"
+        f"Log at *{fmt12(meal['meal_time'])}* on {dl}?"
     )
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("✅ Log it", callback_data=f"log:{pending_id}"),
@@ -282,12 +448,13 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await db_insert(meal)
         meals = await db_fetch_today()
         totals = {k: sum(float(m.get(k) or 0) for m in meals) for k in TARGETS}
-        cal_pct = min(round((totals["cal"]/TARGETS["cal"])*100), 100)
-        pro_pct = min(round((totals["protein"]/TARGETS["protein"])*100), 100)
+        cal_pct = min(round((totals["cal"] / TARGETS["cal"]) * 100), 100)
+        pro_pct = min(round((totals["protein"] / TARGETS["protein"]) * 100), 100)
         await query.edit_message_text(
             f"✅ Logged: *{meal['name']}*\n"
             f"`{round(meal['cal'])} kcal · {round(meal['protein'])}g protein`\n\n"
-            f"Today: {round(totals['cal'])}/1850 kcal ({cal_pct}%) · {round(totals['protein'])}/145g pro ({pro_pct}%)",
+            f"Today: {round(totals['cal'])}/{TARGETS['cal']} kcal ({cal_pct}%) · "
+            f"{round(totals['protein'])}/{TARGETS['protein']}g pro ({pro_pct}%)",
             parse_mode="Markdown"
         )
     except Exception as e:
@@ -299,9 +466,14 @@ async def main():
     print(f"Health server on port {PORT}")
 
     app = Application.builder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("today", today_cmd))
-    app.add_handler(CommandHandler("undo", undo_cmd))
+    app.add_handler(CommandHandler("start",     start))
+    app.add_handler(CommandHandler("today",     today_cmd))
+    app.add_handler(CommandHandler("yesterday", yesterday_cmd))
+    app.add_handler(CommandHandler("week",      week_cmd))
+    app.add_handler(CommandHandler("streak",    streak_cmd))
+    app.add_handler(CommandHandler("targets",   targets_cmd))
+    app.add_handler(CommandHandler("delete",    delete_cmd))
+    app.add_handler(CommandHandler("undo",      undo_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
