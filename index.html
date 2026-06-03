@@ -85,13 +85,23 @@ const SEED = [
 // ─── tiny UI components ────────────────────────────────────────
 
 function Ring({value,target,color,track,size=88,sw=8}){
-  const r=(size-sw)/2, circ=2*Math.PI*r, pct=Math.min(value/target,1);
+  const r=(size-sw)/2, circ=2*Math.PI*r;
+  const rawPct=value/target, isOver=rawPct>1;
+  const mainPct=Math.min(rawPct,1), overPct=isOver?rawPct-1:0;
+  const textColor=isOver?"#ff9f43":color;
   return h("svg",{width:size,height:size,viewBox:`0 0 ${size} ${size}`,style:{display:"block"}},
     h("circle",{cx:size/2,cy:size/2,r,fill:"none",stroke:track,strokeWidth:sw}),
     h("circle",{cx:size/2,cy:size/2,r,fill:"none",stroke:color,strokeWidth:sw,
-      strokeLinecap:"round",strokeDasharray:circ,strokeDashoffset:circ*(1-pct),
+      strokeLinecap:isOver?"butt":"round",
+      strokeDasharray:circ,strokeDashoffset:circ*(1-mainPct),
       transform:`rotate(-90 ${size/2} ${size/2})`,style:{transition:"stroke-dashoffset 0.8s ease"}}),
-    h("text",{x:size/2,y:size/2+5,textAnchor:"middle",fontSize:"12",fontWeight:"500",fill:color}, Math.round(pct*100)+"%")
+    isOver&&h("circle",{cx:size/2,cy:size/2,r,fill:"none",stroke:color,strokeWidth:sw,
+      strokeLinecap:"round",
+      strokeDasharray:circ,strokeDashoffset:circ*(1-Math.min(overPct,1)),
+      transform:`rotate(-90 ${size/2} ${size/2})`,
+      style:{transition:"stroke-dashoffset 0.8s ease",filter:`brightness(1.4) drop-shadow(0 0 5px ${color})`}}),
+    h("text",{x:size/2,y:size/2+5,textAnchor:"middle",fontSize:"12",fontWeight:"500",fill:textColor},
+      Math.round(rawPct*100)+"%")
   );
 }
 
@@ -328,18 +338,50 @@ function App(){
         h("div",{style:sHead},"Remaining today"),
         h("div",{style:{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(110px,1fr))",gap:10}},
           ...[
-            {label:"Calories",val:Math.max(0,TARGETS.cal-totals.cal),        unit:"kcal",color:"#7ab8f5"},
-            {label:"Protein", val:Math.max(0,TARGETS.protein-totals.protein),unit:"g",   color:"#8ec94a"},
-            {label:"Carbs",   val:Math.max(0,TARGETS.carbs-totals.carbs),    unit:"g",   color:"#e8a84a"},
-            {label:"Fat",     val:Math.max(0,TARGETS.fat-totals.fat),        unit:"g",   color:"#d97aaa"},
-          ].map(({label,val,unit,color})=>
-            h("div",{key:label,style:{background:D.surface,borderRadius:10,padding:"11px 13px"}},
+            {label:"Calories",val:TARGETS.cal-totals.cal,        unit:"kcal",color:"#7ab8f5"},
+            {label:"Protein", val:TARGETS.protein-totals.protein,unit:"g",   color:"#8ec94a"},
+            {label:"Carbs",   val:TARGETS.carbs-totals.carbs,    unit:"g",   color:"#e8a84a"},
+            {label:"Fat",     val:TARGETS.fat-totals.fat,        unit:"g",   color:"#d97aaa"},
+            {label:"Fiber",   val:TARGETS.fiber-totals.fiber,    unit:"g",   color:"#4ac9b0"},
+          ].map(({label,val,unit,color})=>{
+            const over=val<0, done=val===0;
+            return h("div",{key:label,style:{background:D.surface,borderRadius:10,padding:"11px 13px"}},
               h("div",{style:{fontSize:11,color:D.muted,marginBottom:5}},label),
-              h("div",{style:{fontSize:18,fontWeight:600,color:val===0?D.accent:color}}, val===0?"✓":`${Math.round(val)}${unit}`)
-            )
-          )
+              h("div",{style:{fontSize:18,fontWeight:600,color:done?D.accent:over?"#ff9f43":color}},
+                done?"✓":over?`+${Math.round(Math.abs(val))}${unit}`:`${Math.round(val)}${unit}`)
+            );
+          })
         )
       ),
+      (()=>{
+        const proKcal=totals.protein*4, carbKcal=totals.carbs*4, fatKcal=totals.fat*9;
+        const macroTotal=proKcal+carbKcal+fatKcal;
+        if(macroTotal<1) return null;
+        const proW=(proKcal/macroTotal*100).toFixed(1);
+        const carbW=(carbKcal/macroTotal*100).toFixed(1);
+        const fatW=(fatKcal/macroTotal*100).toFixed(1);
+        return h("div",{style:card},
+          h("div",{style:sHead},"Macro split — caloric contribution"),
+          h("div",{style:{display:"flex",height:10,borderRadius:6,overflow:"hidden",marginBottom:12}},
+            h("div",{style:{width:`${proW}%`,background:"#8ec94a"}}),
+            h("div",{style:{width:`${carbW}%`,background:"#e8a84a"}}),
+            h("div",{style:{width:`${fatW}%`,background:"#d97aaa"}})
+          ),
+          h("div",{style:{display:"flex",gap:16,flexWrap:"wrap"}},
+            ...[
+              {label:"Protein",pct:proW,kcal:Math.round(proKcal),color:"#8ec94a"},
+              {label:"Carbs",  pct:carbW,kcal:Math.round(carbKcal),color:"#e8a84a"},
+              {label:"Fat",    pct:fatW,kcal:Math.round(fatKcal),color:"#d97aaa"},
+            ].map(({label,pct,kcal,color})=>
+              h("div",{key:label,style:{display:"flex",alignItems:"center",gap:6}},
+                h("div",{style:{width:8,height:8,borderRadius:2,background:color,flexShrink:0}}),
+                h("span",{style:{fontSize:12,color:D.text}},label),
+                h("span",{style:{fontSize:12,color:D.muted}},`${pct}% · ${kcal} kcal`)
+              )
+            )
+          )
+        );
+      })(),
       h("div",{style:card},
         h("div",{style:sHead},"Today's meals"),
         viewMeals.length===0
@@ -426,7 +468,54 @@ function App(){
             h("span",{style:{fontSize:11,color:D.muted,width:60,textAlign:"right"}}, cal>0?`${cal} kcal`:"—")
           );
         })
-      )
+      ),
+      (()=>{
+        // 30-day calendar heatmap
+        const today=todayStr(), todayDt=new Date(today+"T12:00:00");
+        const days30=Array.from({length:30},(_,i)=>{ const d=new Date(todayDt); d.setDate(d.getDate()-(29-i)); return d.toISOString().split("T")[0]; });
+        const cellColor=key=>{
+          const meals=byDate[key]||[];
+          if(!meals.length) return D.hint;
+          const cal=meals.reduce((s,m)=>s+m.cal,0);
+          const pro=meals.reduce((s,m)=>s+m.protein,0);
+          const calPct=cal/TARGETS.cal, proPct=pro/TARGETS.protein;
+          const score=Math.min(calPct,1)*0.5+Math.min(proPct,1)*0.5;
+          if(score>=0.9) return "#5a9e2f";
+          if(score>=0.6) return "#8ec94a";
+          if(score>=0.3) return "#c8a840";
+          return "#4a3a20";
+        };
+        // week labels: Mon-Sun header
+        const DOW=["M","T","W","T","F","S","S"];
+        // first day of week for alignment
+        const firstDow=new Date(days30[0]+"T12:00:00").getDay(); // 0=Sun
+        const offset=(firstDow+6)%7; // offset so Mon=0
+        const cells=[...Array(offset).fill(null),...days30];
+        return h("div",{style:card},
+          h("div",{style:sHead},"30-day log heatmap"),
+          h("div",{style:{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:4,marginBottom:8}},
+            ...DOW.map((d,i)=>h("div",{key:i,style:{textAlign:"center",fontSize:10,color:D.muted}},d))
+          ),
+          h("div",{style:{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:4}},
+            ...cells.map((key,i)=>
+              key===null
+                ? h("div",{key:"e"+i,style:{aspectRatio:"1",borderRadius:3}})
+                : h("div",{key,title:key,style:{
+                    aspectRatio:"1",borderRadius:3,
+                    background:cellColor(key),
+                    outline:key===today?`1.5px solid ${D.accent}`:"none",
+                  }})
+            )
+          ),
+          h("div",{style:{display:"flex",gap:12,marginTop:10,alignItems:"center",flexWrap:"wrap"}},
+            ...[ ["#5a9e2f","≥90% targets"],["#8ec94a","≥60%"],["#c8a840","≥30%"],["#4a3a20","< 30%"],[D.hint,"No data"] ]
+              .map(([color,label])=>h("div",{key:label,style:{display:"flex",alignItems:"center",gap:4}},
+                h("div",{style:{width:10,height:10,borderRadius:2,background:color}}),
+                h("span",{style:{fontSize:10,color:D.muted}},label)
+              ))
+          )
+        );
+      })()
     ),
 
     // SOURCES
