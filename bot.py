@@ -95,6 +95,10 @@ def parse_time_from_text(text: str):
             date_str = now.replace(month=mon, day=int(dm.group(2))).strftime("%Y-%m-%d")
             date_consumed = len(dm.group())
 
+    # Late night rule: 00:00–03:59 with no explicit date → previous day
+    if not date_str and hh < 4:
+        date_str = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+
     remainder = after[date_consumed:].strip()
     cleaned = (text[:m.start()] + " " + remainder).strip()
     return cleaned, time_str, date_str or today_str()
@@ -150,7 +154,23 @@ def parse_message(text: str):
     text, custom_time, custom_date = parse_time_from_text(text)
     meal_time = custom_time or now_time()
     meal_date = custom_date or today_str()
-    tagged = re.findall(r'(\d+\.?\d*)\s*(kcal|cal|p|pro|protein|c|carb|carbs|f|fat|fb|fiber|fibre)?', text, re.IGNORECASE)
+
+    # Find where the macro block starts by scanning tokens from the right.
+    # A macro token is a number (optionally immediately followed by a unit tag).
+    # This prevents numbers in the meal name (e.g. "2 eggs") from being parsed as macros.
+    macro_tok = re.compile(r'^(\d+\.?\d*)(kcal|cal|p|pro|protein|c|carb|carbs|f|fat|fb|fiber|fibre)?$', re.IGNORECASE)
+    tokens = text.split()
+    macro_start = len(tokens)
+    for i in range(len(tokens) - 1, -1, -1):
+        if macro_tok.match(tokens[i]):
+            macro_start = i
+        else:
+            break
+
+    name      = " ".join(tokens[:macro_start]).strip() or "Meal"
+    macro_txt = " ".join(tokens[macro_start:])
+
+    tagged = re.findall(r'(\d+\.?\d*)\s*(kcal|cal|p|pro|protein|c|carb|carbs|f|fat|fb|fiber|fibre)?', macro_txt, re.IGNORECASE)
     nums, plain = {}, []
     for val, tag in tagged:
         val = float(val)
@@ -166,8 +186,6 @@ def parse_message(text: str):
             nums[key] = plain.pop(0)
     if not nums or "cal" not in nums:
         return None, "❓ Couldn't find macros. Format:\n`meal name 320 38 12 12 2`\n_(name cal protein carbs fat fiber)_"
-    name_part = re.sub(r'\b\d+\.?\d*\s*(kcal|cal|p|pro|protein|c|carb|carbs|f|fat|fb|fiber|fibre)?\b', '', text, flags=re.IGNORECASE)
-    name = re.sub(r'\s+', ' ', name_part).strip().strip('-').strip() or "Meal"
     return {"meal_date": meal_date, "meal_time": meal_time, "name": name[:80],
             "cal": nums.get("cal",0), "protein": nums.get("protein",0),
             "carbs": nums.get("carbs",0), "fat": nums.get("fat",0),
@@ -225,8 +243,13 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     pending_id = str(uuid.uuid4())[:8]
     PENDING[pending_id] = meal
 
-    is_yesterday = meal['meal_date'] != today_str()
-    date_label = f"{meal['meal_date']} (yesterday)" if is_yesterday else "today"
+    yesterday_str = (ist_now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    if meal['meal_date'] == today_str():
+        date_label = "today"
+    elif meal['meal_date'] == yesterday_str:
+        date_label = "yesterday"
+    else:
+        date_label = meal['meal_date']
     summary = (
         f"*{meal['name']}*\n"
         f"`{round(meal['cal'])} kcal  ·  {round(meal['protein'])}g protein`\n"
