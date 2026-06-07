@@ -533,11 +533,13 @@ async def week_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def streak_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(update): return
     try:
+        # Self-heal: credit any milestones not yet awarded (e.g. tables created after a log)
+        await check_and_credit_freezes(update.effective_chat.id)
+
         streak, balance_str = await asyncio.gather(
             compute_streak(), db_get_setting("freeze_balance"))
         balance = int(balance_str)
-        days_into = streak % FREEZE_EVERY
-        days_to_next = FREEZE_EVERY - days_into if days_into > 0 else FREEZE_EVERY
+        days_into = streak % FREEZE_EVERY   # progress within current 6-day window
         good_pro = round(GOOD_DAY_PROTEIN)
 
         if streak == 0:
@@ -547,7 +549,7 @@ async def streak_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         elif streak < FREEZE_EVERY:
             body = (f"🔥 *Streak: {streak} good day{'s' if streak>1 else ''}*\n\n"
                     f"{pct_bar(days_into, FREEZE_EVERY)} {days_into}/{FREEZE_EVERY} — "
-                    f"{days_to_next} more to earn a freeze ❄️")
+                    f"{FREEZE_EVERY - days_into} more to earn a freeze ❄️")
         elif streak < 12:
             body = (f"🔥 *Streak: {streak} good days*\n\n"
                     f"🏆 {streak//FREEZE_EVERY} milestone{'s' if streak//FREEZE_EVERY>1 else ''}!")
@@ -556,7 +558,10 @@ async def streak_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         body += f"\n\n❄️ *Freezes: {balance}/{FREEZE_MAX}*"
         if balance < FREEZE_MAX:
-            body += f"\n{pct_bar(days_into, FREEZE_EVERY)} {days_into}/{FREEZE_EVERY} days to next freeze"
+            if days_into == 0:
+                body += f"\n{pct_bar(0, FREEZE_EVERY)} 0/{FREEZE_EVERY} — new period started"
+            else:
+                body += f"\n{pct_bar(days_into, FREEZE_EVERY)} {days_into}/{FREEZE_EVERY} days to next freeze"
 
         await update.message.reply_text(body, parse_mode="Markdown")
     except Exception as e:
@@ -573,6 +578,9 @@ async def targets_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def freeze_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(update): return
     try:
+        # Self-heal: credit any unclaimed milestones
+        await check_and_credit_freezes(update.effective_chat.id)
+
         streak, balance_str, cheat_dates = await asyncio.gather(
             compute_streak(), db_get_setting("freeze_balance"), db_list_cheat_days())
         balance = int(balance_str)
