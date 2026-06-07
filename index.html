@@ -51,6 +51,22 @@ async function apiFetch(from, to){
   if(!r.ok){ const e=await r.text(); throw new Error(r.status+" "+e); }
   return r.json();
 }
+async function apiFetchCheatDays(){
+  try{
+    const r = await fetch(`${URL_BASE}/cheat_days?order=date.desc`, { headers: HDRS });
+    if(!r.ok) return new Set();
+    const data = await r.json();
+    return new Set(data.map(x=>x.date));
+  } catch(e){ return new Set(); }
+}
+async function apiFetchFreezeBalance(){
+  try{
+    const r = await fetch(`${URL_BASE}/settings?key=eq.freeze_balance`, { headers: HDRS });
+    if(!r.ok) return 0;
+    const data = await r.json();
+    return parseInt(data[0]?.value||'0');
+  } catch(e){ return 0; }
+}
 async function apiInsert(meal){
   const r = await fetch(`${URL_BASE}/meals`, {
     method:"POST",
@@ -87,19 +103,22 @@ const SEED = [
 function Ring({value,target,color,track,size=88,sw=8}){
   const r=(size-sw)/2, circ=2*Math.PI*r;
   const rawPct=value/target, isOver=rawPct>1;
-  const mainPct=Math.min(rawPct,1), overPct=isOver?rawPct-1:0;
+  const mainPct=Math.min(rawPct,1), overPct=isOver?Math.min(rawPct-1,1):0;
   const textColor=isOver?"#ff9f43":color;
+  // overflow arc rendered as separate element only when actually needed
+  const overflowArc=isOver&&overPct>0?h("circle",{cx:size/2,cy:size/2,r,fill:"none",
+    stroke:color,strokeWidth:sw,strokeLinecap:"round",
+    strokeDasharray:circ,strokeDashoffset:circ*(1-overPct),
+    transform:`rotate(-90 ${size/2} ${size/2})`,
+    style:{transition:"stroke-dashoffset 0.8s ease"}}):null;
   return h("svg",{width:size,height:size,viewBox:`0 0 ${size} ${size}`,style:{display:"block"}},
     h("circle",{cx:size/2,cy:size/2,r,fill:"none",stroke:track,strokeWidth:sw}),
     h("circle",{cx:size/2,cy:size/2,r,fill:"none",stroke:color,strokeWidth:sw,
       strokeLinecap:isOver?"butt":"round",
       strokeDasharray:circ,strokeDashoffset:circ*(1-mainPct),
-      transform:`rotate(-90 ${size/2} ${size/2})`,style:{transition:"stroke-dashoffset 0.8s ease"}}),
-    isOver&&h("circle",{cx:size/2,cy:size/2,r,fill:"none",stroke:color,strokeWidth:sw,
-      strokeLinecap:"round",
-      strokeDasharray:circ,strokeDashoffset:circ*(1-Math.min(overPct,1)),
       transform:`rotate(-90 ${size/2} ${size/2})`,
-      style:{transition:"stroke-dashoffset 0.8s ease",filter:`brightness(1.4) drop-shadow(0 0 5px ${color})`}}),
+      style:{transition:"stroke-dashoffset 0.8s ease",opacity:isOver?0.75:1}}),
+    overflowArc,
     h("text",{x:size/2,y:size/2+5,textAnchor:"middle",fontSize:"12",fontWeight:"500",fill:textColor},
       Math.round(rawPct*100)+"%")
   );
@@ -155,10 +174,12 @@ function App(){
   const [viewDate,setVD]     = useState(todayStr());
   const [viewMeals,setVM]    = useState([]);
   const [history,setHist]    = useState([]);
-  const [loading,setLoading] = useState(true);
-  const [error,setError]     = useState(null);
-  const [seeding,setSeeding] = useState(false);
-  const [tick,setTick]       = useState(0);
+  const [loading,setLoading]     = useState(true);
+  const [error,setError]         = useState(null);
+  const [seeding,setSeeding]     = useState(false);
+  const [tick,setTick]           = useState(0);
+  const [cheatDays,setCheatDays] = useState(()=>new Set());
+  const [freezeBal,setFreezeBal] = useState(0);
 
   function goDate(d){ const dt=new Date(viewDate+"T12:00:00"); dt.setDate(dt.getDate()+d); const s=dt.toISOString().split("T")[0]; if(s<=todayStr()) setVD(s); }
 
@@ -169,11 +190,13 @@ function App(){
     (async()=>{
       setLoading(true); setError(null);
       try{
-        const t = await apiFetch(viewDate, viewDate);
-        setVM(t);
-        const from = new Date(); from.setDate(from.getDate()-29);
-        const h = await apiFetch(from.toISOString().split("T")[0], todayStr());
-        setHist(h);
+        const [t, h, cd, fb] = await Promise.all([
+          apiFetch(viewDate, viewDate),
+          apiFetch(new Date(new Date(todayStr()+"T12:00:00").setDate(new Date(todayStr()+"T12:00:00").getDate()-29)).toISOString().split("T")[0], todayStr()),
+          apiFetchCheatDays(),
+          apiFetchFreezeBalance(),
+        ]);
+        setVM(t); setHist(h); setCheatDays(cd); setFreezeBal(fb);
       } catch(e){ setError(e.message); }
       finally{ setLoading(false); }
     })();
@@ -197,11 +220,21 @@ function App(){
   const byDate = {};
   history.forEach(m=>{ (byDate[m.meal_date]=byDate[m.meal_date]||[]).push(m); });
 
+  // Good day = ≥2 meals AND ≥60% protein target (or a cheat day)
+  const GOOD_PRO = TARGETS.protein * 0.6;
+  const isGoodDay = k => {
+    if(cheatDays.has(k)) return true;
+    const m = byDate[k]||[];
+    return m.length >= 2 && m.reduce((s,x)=>s+(x.protein||0),0) >= GOOD_PRO;
+  };
+  const today = todayStr();
+  const todayDt = new Date(today+"T12:00:00");
   let streak=0;
-  for(let i=0;i<30;i++){
-    const d=new Date(); d.setDate(d.getDate()-i);
+  const startI = isGoodDay(today) ? 0 : 1;   // skip today if not yet a good day
+  for(let i=startI;i<90;i++){
+    const d=new Date(todayDt); d.setDate(d.getDate()-i);
     const k=d.toISOString().split("T")[0];
-    if(byDate[k]?.length>0) streak++; else if(i>0) break;
+    if(isGoodDay(k)) streak++; else break;
   }
 
   const PROTEIN_KEYS=[
@@ -257,6 +290,9 @@ function App(){
         h("div",{style:{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}},
           h("div",{style:{background:D.card,border:`0.5px solid ${D.border}`,borderRadius:20,padding:"5px 13px",fontSize:12,color:D.text,display:"flex",gap:6,alignItems:"center"}},
             "🔥 ",h("strong",{style:{fontWeight:600}},streak)," ",h("span",{style:{color:D.muted}},"day streak")
+          ),
+          freezeBal>0&&h("div",{style:{background:D.card,border:`0.5px solid #4a3a6a`,borderRadius:20,padding:"5px 13px",fontSize:12,color:"#b09ad0",display:"flex",gap:6,alignItems:"center"}},
+            "❄️ ",h("strong",{style:{fontWeight:600}},freezeBal)," ",h("span",{style:{color:"#7a6a90"}},"freeze"+(freezeBal>1?"s":""))
           ),
           viewMeals.length===0&&!loading&&viewDate===todayStr()&&h("button",{onClick:seedToday,disabled:seeding,
             style:{background:D.accent,color:D.accentText,border:"none",borderRadius:20,padding:"6px 15px",fontSize:12,fontWeight:600,opacity:seeding?0.6:1}},
@@ -443,9 +479,9 @@ function App(){
         })
       ),
       h("div",{style:card},
-        h("div",{style:sHead},"7-day average"),
+        h("div",{style:sHead},"7-day average (cheat days excluded)"),
         (()=>{
-          const active=last7.filter(k=>byDate[k]);
+          const active=last7.filter(k=>byDate[k]&&!cheatDays.has(k));
           if(!active.length) return h(Empty,{icon:"📊",text:"Log a few days to see averages."});
           const avg=k=>Math.round(active.reduce((s,d)=>s+byDate[d].reduce((a,m)=>a+(m[k]||0),0),0)/active.length);
           return h(Fragment,null,
@@ -474,6 +510,7 @@ function App(){
         const today=todayStr(), todayDt=new Date(today+"T12:00:00");
         const days30=Array.from({length:30},(_,i)=>{ const d=new Date(todayDt); d.setDate(d.getDate()-(29-i)); return d.toISOString().split("T")[0]; });
         const cellColor=key=>{
+          if(cheatDays.has(key)) return "#6b4fa0";  // purple = cheat day
           const meals=byDate[key]||[];
           if(!meals.length) return D.hint;
           const cal=meals.reduce((s,m)=>s+m.cal,0);
@@ -508,7 +545,7 @@ function App(){
             )
           ),
           h("div",{style:{display:"flex",gap:12,marginTop:10,alignItems:"center",flexWrap:"wrap"}},
-            ...[ ["#5a9e2f","≥90% targets"],["#8ec94a","≥60%"],["#c8a840","≥30%"],["#4a3a20","< 30%"],[D.hint,"No data"] ]
+            ...[ ["#5a9e2f","≥90% targets"],["#8ec94a","≥60%"],["#c8a840","≥30%"],["#4a3a20","< 30%"],["#6b4fa0","❄️ Cheat day"],[D.hint,"No data"] ]
               .map(([color,label])=>h("div",{key:label,style:{display:"flex",alignItems:"center",gap:4}},
                 h("div",{style:{width:10,height:10,borderRadius:2,background:color}}),
                 h("span",{style:{fontSize:10,color:D.muted}},label)
