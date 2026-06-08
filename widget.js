@@ -10,7 +10,7 @@
 
 const SUPABASE = "https://uikwwjmzrrxdvwmyguwv.supabase.co/rest/v1";
 const ANON_KEY = "sb_publishable_w9mMEmA0mGbQRs7s8ng76w_FX8hqqPd";
-const DASH_URL = "https://nutritrack-srv.netlify.app"; // ← update to your Netlify URL
+const DASH_URL = "https://chimerical-nougat-d292f9.netlify.app/"; // ← update to your Netlify URL
 
 const TARGETS = { cal: 1850, protein: 145, carbs: 160, fat: 55 };
 
