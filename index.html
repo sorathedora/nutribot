@@ -22,15 +22,38 @@ button{font-family:'DM Sans',sans-serif;cursor:pointer}
 <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
 <script>
-const { useState, useEffect, useCallback, createElement: h, Fragment } = React;
+const { useState, useEffect, useCallback, useMemo, createElement: h, Fragment } = React;
 
-const URL_BASE  = "https://uikwwjmzrrxdvwmyguwv.supabase.co/rest/v1";
-const ANON_KEY  = "sb_publishable_w9mMEmA0mGbQRs7s8ng76w_FX8hqqPd";
-const HDRS      = { "Content-Type":"application/json", "apikey": ANON_KEY, "Authorization":"Bearer "+ANON_KEY };
+const URL_BASE = "https://uikwwjmzrrxdvwmyguwv.supabase.co/rest/v1";
+const ANON_KEY = "sb_publishable_w9mMEmA0mGbQRs7s8ng76w_FX8hqqPd";
+const HDRS     = { "Content-Type":"application/json", apikey: ANON_KEY, Authorization:"Bearer "+ANON_KEY };
 
-const TARGETS   = { cal:1850, protein:145, carbs:160, fat:55, fiber:30 };
-const D         = { bg:"#0f0f0d", surface:"#181816", card:"#1e1e1b", border:"#2a2a26", text:"#f0efe8", muted:"#666660", hint:"#232320", accent:"#c8f060", accentText:"#1a2a04" };
+const TARGETS  = { cal:1850, protein:145, carbs:160, fat:55, fiber:30 };
+const ACT_MIN  = 150;   // kcal to count as valid activity day
+const ACT_GOAL = 300;   // kcal weekly chart reference line
+const D = {
+  bg:"#0f0f0d", surface:"#181816", card:"#1e1e1b", border:"#2a2a26",
+  text:"#f0efe8", muted:"#666660", hint:"#232320",
+  accent:"#c8f060", accentText:"#1a2a04",
+};
+const COLORS = {
+  cal:"#7ab8f5", calBg:"#0b1e35",
+  protein:"#8ec94a", proteinBg:"#141f07",
+  carbs:"#e8a84a", carbsBg:"#271a05",
+  fat:"#d97aaa", fatBg:"#220a18",
+  fiber:"#4ac9b0", fiberBg:"#082820",
+  act:"#a78bfa", actBg:"#1a1030",
+};
+const ACTIVITY_ICONS = {
+  walk:"🚶", jog:"🏃", run:"🏃", badminton:"🏸", basketball:"🏀",
+  swimming:"🏊", cycling:"🚴", yoga:"🧘", gym:"🏋️",
+  football:"⚽", cricket:"🏏", dancing:"💃", hiking:"🥾",
+  sex:"🔥", tennis:"🎾", squash:"🎾", volleyball:"🏐",
+  boxing:"🥊", skipping:"⏭️", stair:"🪜", pilates:"🤸", crossfit:"💪",
+};
+function actIcon(name){ return ACTIVITY_ICONS[name] || "🏃"; }
 
+// ── time helpers ───────────────────────────────────────────────
 function todayStr(){
   const now = new Date();
   const ist = new Date(now.getTime() + 5.5*60*60*1000);
@@ -46,66 +69,62 @@ function displayTime(t){
   return `${hh%12||12}:${String(mm).padStart(2,"0")} ${hh>=12?"PM":"AM"}`;
 }
 
+// ── API ────────────────────────────────────────────────────────
 async function apiFetch(from, to){
-  const r = await fetch(`${URL_BASE}/meals?meal_date=gte.${from}&meal_date=lte.${to}&order=logged_at.asc`, { headers: HDRS });
-  if(!r.ok){ const e=await r.text(); throw new Error(r.status+" "+e); }
+  const r = await fetch(`${URL_BASE}/meals?meal_date=gte.${from}&meal_date=lte.${to}&order=logged_at.asc`,{headers:HDRS});
+  if(!r.ok) throw new Error(r.status+" "+await r.text());
+  return r.json();
+}
+async function apiFetchActivities(from, to){
+  const r = await fetch(`${URL_BASE}/activities?activity_date=gte.${from}&activity_date=lte.${to}&order=logged_at.asc`,{headers:HDRS});
+  if(!r.ok) return [];
   return r.json();
 }
 async function apiFetchCheatDays(){
   try{
-    const r = await fetch(`${URL_BASE}/cheat_days?order=date.desc`, { headers: HDRS });
+    const r = await fetch(`${URL_BASE}/cheat_days?order=date.desc`,{headers:HDRS});
     if(!r.ok) return new Set();
-    const data = await r.json();
-    return new Set(data.map(x=>x.date));
-  } catch(e){ return new Set(); }
+    return new Set((await r.json()).map(x=>x.date));
+  } catch{ return new Set(); }
 }
-async function apiFetchFreezeBalance(){
+async function apiFetchSettings(){
   try{
-    const r = await fetch(`${URL_BASE}/settings?key=eq.freeze_balance`, { headers: HDRS });
-    if(!r.ok) return 0;
-    const data = await r.json();
-    return parseInt(data[0]?.value||'0');
-  } catch(e){ return 0; }
+    const r = await fetch(`${URL_BASE}/settings`,{headers:HDRS});
+    if(!r.ok) return {};
+    const rows = await r.json();
+    return Object.fromEntries(rows.map(x=>[x.key, x.value]));
+  } catch{ return {}; }
 }
 async function apiInsert(meal){
-  const r = await fetch(`${URL_BASE}/meals`, {
-    method:"POST",
-    headers:{ ...HDRS, "Prefer":"return=representation" },
-    body: JSON.stringify(meal)
-  });
-  if(!r.ok){ const e=await r.text(); throw new Error(r.status+" "+e); }
+  const r = await fetch(`${URL_BASE}/meals`,{method:"POST",headers:{...HDRS,"Prefer":"return=representation"},body:JSON.stringify(meal)});
+  if(!r.ok) throw new Error(r.status+" "+await r.text());
   return r.json();
 }
 async function apiDeleteToday(){
-  const r = await fetch(`${URL_BASE}/meals?meal_date=eq.${todayStr()}`, {
-    method:"DELETE",
-    headers:{ ...HDRS, "Prefer":"return=minimal" }
-  });
-  if(!r.ok){ const e=await r.text(); throw new Error(r.status+" "+e); }
+  const r = await fetch(`${URL_BASE}/meals?meal_date=eq.${todayStr()}`,{method:"DELETE",headers:{...HDRS,"Prefer":"return=minimal"}});
+  if(!r.ok) throw new Error(r.status+" "+await r.text());
 }
 
-window.logMeal = async(name, cal, protein, carbs, fat, fiber=0, timeStr=null)=>{
+window.logMeal = async(name,cal,protein,carbs,fat,fiber=0,timeStr=null)=>{
   try{
-    await apiInsert({ meal_date:todayStr(), meal_time:timeStr||fmtTime(), name, cal, protein, carbs, fat, fiber });
-    window.__refresh && window.__refresh();
+    await apiInsert({meal_date:todayStr(),meal_time:timeStr||fmtTime(),name,cal,protein,carbs,fat,fiber});
+    window.__refresh&&window.__refresh();
     return "✓ Logged: "+name;
   } catch(e){ return "Error: "+e.message; }
 };
 
 const SEED = [
-  { meal_time:"08:00", name:"Iced Americano",                             cal:10,  protein:0.5, carbs:1,  fat:0.1, fiber:0   },
-  { meal_time:"08:30", name:"Kellogg's Chocos + Milk",                    cal:280, protein:8,   carbs:46, fat:7,   fiber:1.5 },
-  { meal_time:"13:00", name:"Chicken & Veggie Salad with Yogurt Dressing",cal:320, protein:38,  carbs:12, fat:12,  fiber:2.5 },
+  {meal_time:"08:00",name:"Iced Americano",cal:10,protein:0.5,carbs:1,fat:0.1,fiber:0},
+  {meal_time:"08:30",name:"Kellogg's Chocos + Milk",cal:280,protein:8,carbs:46,fat:7,fiber:1.5},
+  {meal_time:"13:00",name:"Chicken & Veggie Salad with Yogurt Dressing",cal:320,protein:38,carbs:12,fat:12,fiber:2.5},
 ];
 
-// ─── tiny UI components ────────────────────────────────────────
-
+// ── tiny components ────────────────────────────────────────────
 function Ring({value,target,color,track,size=88,sw=8}){
   const r=(size-sw)/2, circ=2*Math.PI*r;
   const rawPct=value/target, isOver=rawPct>1;
   const mainPct=Math.min(rawPct,1), overPct=isOver?Math.min(rawPct-1,1):0;
   const textColor=isOver?"#ff9f43":color;
-  // overflow arc rendered as separate element only when actually needed
   const overflowArc=isOver&&overPct>0?h("circle",{cx:size/2,cy:size/2,r,fill:"none",
     stroke:color,strokeWidth:sw,strokeLinecap:"round",
     strokeDasharray:circ,strokeDashoffset:circ*(1-overPct),
@@ -134,7 +153,7 @@ function Bar({label,value,target,color}){
     h("span",{style:{fontSize:12,color:D.muted,width:60,flexShrink:0}},label),
     h("div",{style:{flex:1,height:6,background:D.hint,borderRadius:3,overflow:"hidden"}},
       h("div",{style:{width:`${pct}%`,height:"100%",background:color,borderRadius:3,transition:"width 0.6s ease"}})),
-    h("span",{style:{fontSize:11,color:D.muted,width:76,textAlign:"right",flexShrink:0}}, `${Math.round(value)} / ${target}`)
+    h("span",{style:{fontSize:11,color:D.muted,width:76,textAlign:"right",flexShrink:0}},`${Math.round(value)} / ${target}`)
   );
 }
 
@@ -145,10 +164,30 @@ function MealRow({meal}){
       h("span",{style:{fontSize:11,color:D.muted,flexShrink:0,marginLeft:8}},displayTime(meal.meal_time))
     ),
     h("div",{style:{display:"flex",gap:5,flexWrap:"wrap"}},
-      h(Pill,{label:`${Math.round(meal.cal)} kcal`,      color:"#7ab8f5",bg:"#0b1e35"}),
-      h(Pill,{label:`${Math.round(meal.protein)}g pro`,  color:"#8ec94a",bg:"#141f07"}),
-      h(Pill,{label:`${Math.round(meal.carbs)}g carbs`,  color:"#e8a84a",bg:"#271a05"}),
-      h(Pill,{label:`${Math.round(meal.fat)}g fat`,      color:"#d97aaa",bg:"#220a18"})
+      h(Pill,{label:`${Math.round(meal.cal)} kcal`,       color:COLORS.cal,    bg:COLORS.calBg}),
+      h(Pill,{label:`${Math.round(meal.protein)}g pro`,   color:COLORS.protein,bg:COLORS.proteinBg}),
+      h(Pill,{label:`${Math.round(meal.carbs)}g carbs`,   color:COLORS.carbs,  bg:COLORS.carbsBg}),
+      h(Pill,{label:`${Math.round(meal.fat)}g fat`,       color:COLORS.fat,    bg:COLORS.fatBg}),
+      (meal.fiber||0)>0&&h(Pill,{label:`${Math.round(meal.fiber||0)}g fiber`,color:COLORS.fiber,bg:COLORS.fiberBg})
+    )
+  );
+}
+
+function ActivityRow({act}){
+  const valid = (act.calories_burned||0) >= ACT_MIN;
+  return h("div",{style:{borderBottom:`0.5px solid ${D.border}`,padding:"11px 0"}},
+    h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center"}},
+      h("div",{style:{display:"flex",alignItems:"center",gap:8}},
+        h("span",{style:{fontSize:18}}, actIcon(act.activity)),
+        h("span",{style:{fontSize:14,fontWeight:500,color:D.text}},
+          act.activity.charAt(0).toUpperCase()+act.activity.slice(1))
+      ),
+      h("span",{style:{fontSize:11,color:valid?"#a78bfa":D.muted}}, valid?"✓ streak":"below threshold")
+    ),
+    h("div",{style:{display:"flex",gap:5,flexWrap:"wrap",marginTop:6}},
+      h(Pill,{label:`${act.duration_minutes} min`,        color:D.muted, bg:D.hint}),
+      h(Pill,{label:act.intensity,                        color:D.muted, bg:D.hint}),
+      h(Pill,{label:`${act.calories_burned} kcal burned`, color:COLORS.act,bg:COLORS.actBg})
     )
   );
 }
@@ -164,63 +203,28 @@ function Spinner(){
   return h("div",{style:{width:22,height:22,border:`2px solid ${D.hint}`,borderTop:`2px solid ${D.accent}`,borderRadius:"50%",animation:"spin 0.7s linear infinite"}});
 }
 
-// ─── App ───────────────────────────────────────────────────────
+function TabPill({label,active,onClick}){
+  return h("button",{onClick,style:{
+    fontSize:12,padding:"6px 17px",borderRadius:20,
+    border:`0.5px solid ${active?D.accent:D.border}`,
+    background:active?D.accent:"transparent",
+    color:active?D.accentText:D.muted,
+    fontWeight:active?600:400,transition:"all 0.15s"
+  }},label);
+}
 
-function App(){
-  const [tab,setTab]         = useState("today");
-  const [expanded,setExp]    = useState(()=>new Set([todayStr()]));
-  const toggleDay = d => setExp(prev=>{ const s=new Set(prev); s.has(d)?s.delete(d):s.add(d); return s; });
-  const [todayMeals,setTM]   = useState([]);
-  const [viewDate,setVD]     = useState(todayStr());
-  const [viewMeals,setVM]    = useState([]);
-  const [history,setHist]    = useState([]);
-  const [loading,setLoading]     = useState(true);
-  const [error,setError]         = useState(null);
-  const [seeding,setSeeding]     = useState(false);
-  const [tick,setTick]           = useState(0);
-  const [cheatDays,setCheatDays] = useState(()=>new Set());
-  const [freezeBal,setFreezeBal] = useState(0);
+function SubTabPill({label,active,onClick}){
+  return h("button",{onClick,style:{
+    fontSize:11,padding:"4px 13px",borderRadius:20,
+    border:`0.5px solid ${active?"#3a3a36":D.border}`,
+    background:active?D.card:"transparent",
+    color:active?D.text:D.muted,
+    fontWeight:active?500:400,transition:"all 0.15s"
+  }},label);
+}
 
-  function goDate(d){ const dt=new Date(viewDate+"T12:00:00"); dt.setDate(dt.getDate()+d); const s=dt.toISOString().split("T")[0]; if(s<=todayStr()) setVD(s); }
-
-  const refresh = useCallback(()=>setTick(t=>t+1),[]);
-  window.__refresh = refresh;
-
-  useEffect(()=>{
-    (async()=>{
-      setLoading(true); setError(null);
-      try{
-        const [t, h, cd, fb] = await Promise.all([
-          apiFetch(viewDate, viewDate),
-          apiFetch(new Date(new Date(todayStr()+"T12:00:00").setDate(new Date(todayStr()+"T12:00:00").getDate()-29)).toISOString().split("T")[0], todayStr()),
-          apiFetchCheatDays(),
-          apiFetchFreezeBalance(),
-        ]);
-        setVM(t); setHist(h); setCheatDays(cd); setFreezeBal(fb);
-      } catch(e){ setError(e.message); }
-      finally{ setLoading(false); }
-    })();
-  },[tick, viewDate]);
-
-  async function seedToday(){
-    setSeeding(true);
-    try{
-      await apiDeleteToday();
-      for(const m of SEED) await apiInsert({...m, meal_date:todayStr()});
-      refresh();
-    } catch(e){ setError(e.message); }
-    finally{ setSeeding(false); }
-  }
-
-  const totals = viewMeals.reduce(
-    (a,m)=>({cal:a.cal+m.cal, protein:a.protein+m.protein, carbs:a.carbs+m.carbs, fat:a.fat+m.fat, fiber:a.fiber+(m.fiber||0)}),
-    {cal:0,protein:0,carbs:0,fat:0,fiber:0}
-  );
-
-  const byDate = {};
-  history.forEach(m=>{ (byDate[m.meal_date]=byDate[m.meal_date]||[]).push(m); });
-
-  // Good day = ≥2 meals AND ≥60% protein target (or a cheat day)
+// ── streak helpers ─────────────────────────────────────────────
+function calcNutStreak(byDate, cheatDays){
   const GOOD_PRO = TARGETS.protein * 0.6;
   const isGoodDay = k => {
     if(cheatDays.has(k)) return true;
@@ -230,53 +234,124 @@ function App(){
   const today = todayStr();
   const todayDt = new Date(today+"T12:00:00");
   let streak=0;
-  const startI = isGoodDay(today) ? 0 : 1;   // skip today if not yet a good day
+  const startI = isGoodDay(today)?0:1;
   for(let i=startI;i<90;i++){
     const d=new Date(todayDt); d.setDate(d.getDate()-i);
     const k=d.toISOString().split("T")[0];
     if(isGoodDay(k)) streak++; else break;
   }
+  return streak;
+}
 
-  const PROTEIN_KEYS=[
-    "chicken","eggs","egg","paneer","whey","fish","mutton","lamb","beef","pork","turkey",
-    "tofu","tempeh","dal","lentil","lentils","chickpea","chickpeas","chole","rajma","moong",
-    "tuna","salmon","prawn","prawns","shrimp","crab","cottage cheese","curd","yogurt","dahi",
-    "milk","soy","protein","oats","quinoa","peanut","peanuts","almond","almonds","cheese"
-  ];
-  const NORMALIZE={"eggs":"Egg","egg":"Egg","lentils":"Lentil","lentil":"Lentil",
-    "chickpeas":"Chickpea","chickpea":"Chickpea","prawns":"Prawn","peanuts":"Peanut","almonds":"Almond"};
-  function proteinSource(name){
-    const lower=name.toLowerCase();
-    const k=PROTEIN_KEYS.find(k=>new RegExp(`\\b${k}\\b`).test(lower))||null;
-    if(!k) return null;
-    return NORMALIZE[k]||(k.charAt(0).toUpperCase()+k.slice(1));
+function calcActStreak(actByDate){
+  const isValid = k => (actByDate[k]||[]).some(a=>a.calories_burned>=ACT_MIN);
+  const today = todayStr();
+  const todayDt = new Date(today+"T12:00:00");
+  let streak=0;
+  const startI = isValid(today)?0:1;
+  for(let i=startI;i<90;i++){
+    const d=new Date(todayDt); d.setDate(d.getDate()-i);
+    const k=d.toISOString().split("T")[0];
+    if(isValid(k)) streak++; else break;
   }
-  const sources={};
-  const daySourceMap={}, dayTotalMap={};
-  history.forEach(m=>{
-    const label=proteinSource(m.name);
-    sources[label||"Other"]=(sources[label||"Other"]||0)+(m.protein||0);
-    const d=m.meal_date;
-    if(!daySourceMap[d]) daySourceMap[d]={};
-    dayTotalMap[d]=(dayTotalMap[d]||0)+(m.protein||0);
-    if(label) daySourceMap[d][label]=(daySourceMap[d][label]||0)+(m.protein||0);
-  });
-  const grandTotal=Object.values(sources).reduce((s,v)=>s+v,0);
-  const topSources=Object.entries(sources).filter(([k])=>k!=="Other").sort((a,b)=>b[1]-a[1]).slice(0,6);
-  const avgDayPct={};
-  topSources.forEach(([label])=>{
-    const active=Object.keys(daySourceMap).filter(d=>daySourceMap[d][label]&&dayTotalMap[d]>0);
-    avgDayPct[label]=active.length
-      ? Math.round(active.reduce((s,d)=>s+(daySourceMap[d][label]/dayTotalMap[d])*100,0)/active.length)
-      : 0;
-  });
+  return streak;
+}
 
-  const last7=Array.from({length:7},(_,i)=>{ const d=new Date(); d.setDate(d.getDate()-(6-i)); return d.toISOString().split("T")[0]; });
+// ── App ────────────────────────────────────────────────────────
+function App(){
+  const [mainTab,  setMainTab]  = useState("nutrition");
+  const [nutTab,   setNutTab]   = useState("today");
+  const [expanded, setExp]      = useState(()=>new Set([todayStr()]));
+  const toggleDay = d => setExp(prev=>{ const s=new Set(prev); s.has(d)?s.delete(d):s.add(d); return s; });
+
+  const [viewDate, setVD]       = useState(todayStr());
+  const [viewMeals,setVM]       = useState([]);
+  const [history,  setHist]     = useState([]);
+  const [acts,     setActs]     = useState([]);    // today's activities (for viewed date)
+  const [actHist,  setActHist]  = useState([]);    // 30-day activity history
+  const [cheatDays,setCD]       = useState(()=>new Set());
+  const [settings, setSettings] = useState({});
+  const [loading,  setLoading]  = useState(true);
+  const [error,    setError]    = useState(null);
+  const [seeding,  setSeeding]  = useState(false);
+  const [tick,     setTick]     = useState(0);
+
+  function goDate(d){ const dt=new Date(viewDate+"T12:00:00"); dt.setDate(dt.getDate()+d); const s=dt.toISOString().split("T")[0]; if(s<=todayStr()) setVD(s); }
+
+  const refresh = useCallback(()=>setTick(t=>t+1),[]);
+  window.__refresh = refresh;
+
+  useEffect(()=>{
+    (async()=>{
+      setLoading(true); setError(null);
+      const today = todayStr();
+      const hist30from = new Date(new Date(today+"T12:00:00").setDate(new Date(today+"T12:00:00").getDate()-29)).toISOString().split("T")[0];
+      try{
+        const [viewM, histM, viewA, histA, cd, sett] = await Promise.all([
+          apiFetch(viewDate, viewDate),
+          apiFetch(hist30from, today),
+          apiFetchActivities(viewDate, viewDate),
+          apiFetchActivities(hist30from, today),
+          apiFetchCheatDays(),
+          apiFetchSettings(),
+        ]);
+        setVM(viewM); setHist(histM);
+        setActs(viewA); setActHist(histA);
+        setCD(cd); setSettings(sett);
+      } catch(e){ setError(e.message); }
+      finally{ setLoading(false); }
+    })();
+  },[tick, viewDate]);
+
+  // Derived data
+  const totals = useMemo(()=>viewMeals.reduce(
+    (a,m)=>({cal:a.cal+m.cal,protein:a.protein+m.protein,carbs:a.carbs+m.carbs,fat:a.fat+m.fat,fiber:a.fiber+(m.fiber||0)}),
+    {cal:0,protein:0,carbs:0,fat:0,fiber:0}),
+  [viewMeals]);
+
+  const actTotals = useMemo(()=>({
+    burned: acts.reduce((s,a)=>s+(a.calories_burned||0),0),
+    valid:  acts.filter(a=>(a.calories_burned||0)>=ACT_MIN).length,
+  }),[acts]);
+
+  const byDate = useMemo(()=>{
+    const m={}; history.forEach(x=>{ (m[x.meal_date]=m[x.meal_date]||[]).push(x); }); return m;
+  },[history]);
+
+  const actByDate = useMemo(()=>{
+    const m={}; actHist.forEach(a=>{ (m[a.activity_date]=m[a.activity_date]||[]).push(a); }); return m;
+  },[actHist]);
+
+  const nutStreak = useMemo(()=>calcNutStreak(byDate,cheatDays),[byDate,cheatDays]);
+  const actStreak = useMemo(()=>calcActStreak(actByDate),[actByDate]);
+  const freezeBal = parseInt(settings.freeze_balance||"0");
+  const actFreezeBal = parseInt(settings.act_freeze_balance||"0");
+
+  async function seedToday(){
+    setSeeding(true);
+    try{ await apiDeleteToday(); for(const m of SEED) await apiInsert({...m,meal_date:todayStr()}); refresh(); }
+    catch(e){ setError(e.message); }
+    finally{ setSeeding(false); }
+  }
 
   const card  = {background:D.card,border:`0.5px solid ${D.border}`,borderRadius:14,padding:"1rem 1.25rem",marginBottom:12};
   const sHead = {fontSize:11,fontWeight:500,color:D.muted,letterSpacing:"0.08em",textTransform:"uppercase",marginBottom:14};
-  const TABS  = ["today","log","history","sources"];
 
+  const last7 = useMemo(()=>Array.from({length:7},(_,i)=>{ const d=new Date(); d.setDate(d.getDate()-(6-i)); return d.toISOString().split("T")[0]; }),[]);
+  const today  = todayStr();
+
+  // Protein sources (for nutrition → sources sub-tab)
+  const PROTEIN_KEYS=["chicken","eggs","egg","paneer","whey","fish","mutton","lamb","beef","pork","turkey","tofu","tempeh","dal","lentil","lentils","chickpea","chickpeas","chole","rajma","moong","tuna","salmon","prawn","prawns","shrimp","crab","cottage cheese","curd","yogurt","dahi","milk","soy","protein","oats","quinoa","peanut","peanuts","almond","almonds","cheese"];
+  const NORMALIZE={"eggs":"Egg","egg":"Egg","lentils":"Lentil","lentil":"Lentil","chickpeas":"Chickpea","chickpea":"Chickpea","prawns":"Prawn","peanuts":"Peanut","almonds":"Almond"};
+  function proteinSource(name){ const lower=name.toLowerCase(); const k=PROTEIN_KEYS.find(k=>new RegExp(`\\b${k}\\b`).test(lower))||null; if(!k) return null; return NORMALIZE[k]||(k.charAt(0).toUpperCase()+k.slice(1)); }
+  const sources={},daySourceMap={},dayTotalMap={};
+  history.forEach(m=>{ const label=proteinSource(m.name); sources[label||"Other"]=(sources[label||"Other"]||0)+(m.protein||0); const d=m.meal_date; if(!daySourceMap[d]) daySourceMap[d]={}; dayTotalMap[d]=(dayTotalMap[d]||0)+(m.protein||0); if(label) daySourceMap[d][label]=(daySourceMap[d][label]||0)+(m.protein||0); });
+  const grandTotal=Object.values(sources).reduce((s,v)=>s+v,0);
+  const topSources=Object.entries(sources).filter(([k])=>k!=="Other").sort((a,b)=>b[1]-a[1]).slice(0,6);
+  const avgDayPct={};
+  topSources.forEach(([label])=>{ const active=Object.keys(daySourceMap).filter(d=>daySourceMap[d][label]&&dayTotalMap[d]>0); avgDayPct[label]=active.length?Math.round(active.reduce((s,d)=>s+(daySourceMap[d][label]/dayTotalMap[d])*100,0)/active.length):0; });
+
+  // ── render ─────────────────────────────────────────────────
   return h("div",null,
 
     // Header
@@ -284,308 +359,294 @@ function App(){
       h("div",{style:{fontSize:10,letterSpacing:"0.14em",color:D.muted,textTransform:"uppercase",marginBottom:5}},"NutriTrack"),
       h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:10}},
         h("div",null,
-          h("div",{style:{fontSize:21,fontWeight:600,color:D.text}}, new Date(viewDate+"T12:00:00").toLocaleDateString("en-IN",{weekday:"long",day:"numeric",month:"long"})),
-          h("div",{style:{fontSize:12,color:D.muted,marginTop:3}},"1,850 kcal · 145g protein · 160g carbs · 55g fat")
+          h("div",{style:{fontSize:21,fontWeight:600,color:D.text}},
+            new Date(viewDate+"T12:00:00").toLocaleDateString("en-IN",{weekday:"long",day:"numeric",month:"long"})),
+          h("div",{style:{fontSize:12,color:D.muted,marginTop:3}},
+            "1,850 kcal · 145g protein · 160g carbs · 55g fat · 30g fiber")
         ),
         h("div",{style:{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}},
+          // Nutrition streak chip
           h("div",{style:{background:D.card,border:`0.5px solid ${D.border}`,borderRadius:20,padding:"5px 13px",fontSize:12,color:D.text,display:"flex",gap:6,alignItems:"center"}},
-            "🔥 ",h("strong",{style:{fontWeight:600}},streak)," ",h("span",{style:{color:D.muted}},"day streak")
-          ),
+            "🥗 ",h("strong",{style:{fontWeight:600}},nutStreak),h("span",{style:{color:D.muted}},"nut")),
+          // Activity streak chip
+          h("div",{style:{background:D.card,border:`0.5px solid ${D.border}`,borderRadius:20,padding:"5px 13px",fontSize:12,color:D.text,display:"flex",gap:6,alignItems:"center"}},
+            "🏃 ",h("strong",{style:{fontWeight:600}},actStreak),h("span",{style:{color:D.muted}},"act")),
           freezeBal>0&&h("div",{style:{background:D.card,border:`0.5px solid #4a3a6a`,borderRadius:20,padding:"5px 13px",fontSize:12,color:"#b09ad0",display:"flex",gap:6,alignItems:"center"}},
-            "❄️ ",h("strong",{style:{fontWeight:600}},freezeBal)," ",h("span",{style:{color:"#7a6a90"}},"freeze"+(freezeBal>1?"s":""))
-          ),
-          viewMeals.length===0&&!loading&&viewDate===todayStr()&&h("button",{onClick:seedToday,disabled:seeding,
+            "❄️ ",h("strong",{style:{fontWeight:600}},freezeBal)),
+          viewMeals.length===0&&!loading&&viewDate===today&&h("button",{onClick:seedToday,disabled:seeding,
             style:{background:D.accent,color:D.accentText,border:"none",borderRadius:20,padding:"6px 15px",fontSize:12,fontWeight:600,opacity:seeding?0.6:1}},
-            seeding?"Logging...":"↑ Log today's meals"),
+            seeding?"Logging...":"↑ Sample day"),
           h("button",{onClick:refresh,style:{background:"transparent",color:D.muted,border:`0.5px solid ${D.border}`,borderRadius:20,padding:"5px 13px",fontSize:13}},"↻")
         )
       )
     ),
 
-    // Nav
+    // Main tab nav
     h("div",{style:{display:"flex",gap:6,marginBottom:"1.5rem",flexWrap:"wrap"}},
-      ...TABS.map(t=>h("button",{key:t,onClick:()=>setTab(t),style:{
-        fontSize:12,padding:"6px 17px",borderRadius:20,
-        border:`0.5px solid ${tab===t?D.accent:D.border}`,
-        background:tab===t?D.accent:"transparent",
-        color:tab===t?D.accentText:D.muted,
-        fontWeight:tab===t?600:400,transition:"all 0.15s"
-      }},t.charAt(0).toUpperCase()+t.slice(1)))
+      h(TabPill,{label:"Nutrition",active:mainTab==="nutrition",onClick:()=>setMainTab("nutrition")}),
+      h(TabPill,{label:"Activity",  active:mainTab==="activity", onClick:()=>setMainTab("activity")}),
+      h(TabPill,{label:"Summary",   active:mainTab==="summary",  onClick:()=>setMainTab("summary")})
     ),
 
-    // Error
     error&&h("div",{style:{...card,background:"#1a0808",border:`0.5px solid #5a1a1a`,color:"#f08080",fontSize:13,lineHeight:1.6}},
       "⚠ "+error,
-      h("div",{style:{marginTop:6,fontSize:12,color:"#c06060"}},"Make sure the Supabase table and RLS policy are set up correctly.")
-    ),
+      h("div",{style:{marginTop:6,fontSize:12,color:"#c06060"}},"Check Supabase table/RLS setup.")),
 
-    // Loading
     loading&&h("div",{style:{display:"flex",flexDirection:"column",alignItems:"center",gap:14,padding:"3rem"}},
-      h(Spinner), h("span",{style:{fontSize:13,color:D.muted}},"Connecting to database...")
-    ),
+      h(Spinner), h("span",{style:{fontSize:13,color:D.muted}},"Connecting to database...")),
 
-    // TODAY
-    !loading&&tab==="today"&&h("div",{className:"fade"},
-      h("div",{style:{display:"flex",alignItems:"center",gap:8,marginBottom:12}},
-        h("button",{onClick:()=>goDate(-1),style:{background:"transparent",border:`0.5px solid ${D.border}`,color:D.muted,borderRadius:8,padding:"4px 13px",fontSize:16,lineHeight:1}},"‹"),
-        h("input",{type:"date",value:viewDate,max:todayStr(),onChange:e=>e.target.value&&setVD(e.target.value),
-          style:{background:D.card,border:`0.5px solid ${D.border}`,color:D.text,borderRadius:8,padding:"5px 10px",fontSize:12,fontFamily:"inherit",flex:1,colorScheme:"dark"}}),
-        viewDate<todayStr()&&h("button",{onClick:()=>setVD(todayStr()),style:{fontSize:11,padding:"5px 12px",borderRadius:8,background:D.accent,color:D.accentText,border:"none",fontWeight:600,whiteSpace:"nowrap"}},"Today"),
-        h("button",{onClick:()=>goDate(1),disabled:viewDate>=todayStr(),style:{background:"transparent",border:`0.5px solid ${D.border}`,color:viewDate>=todayStr()?D.hint:D.muted,borderRadius:8,padding:"4px 13px",fontSize:16,lineHeight:1}},"›")
+    // ═══════════════════════════════════════════════════════
+    // NUTRITION TAB
+    // ═══════════════════════════════════════════════════════
+    !loading&&mainTab==="nutrition"&&h("div",{className:"fade"},
+      // Sub-tab nav
+      h("div",{style:{display:"flex",gap:6,marginBottom:"1.25rem",flexWrap:"wrap"}},
+        h(SubTabPill,{label:"Today",  active:nutTab==="today",  onClick:()=>setNutTab("today")}),
+        h(SubTabPill,{label:"Log",    active:nutTab==="log",    onClick:()=>setNutTab("log")}),
+        h(SubTabPill,{label:"History",active:nutTab==="history",onClick:()=>setNutTab("history")}),
+        h(SubTabPill,{label:"Sources",active:nutTab==="sources",onClick:()=>setNutTab("sources")})
       ),
-      h("div",{style:{...card,padding:"1.25rem 1rem"}},
-        h("div",{style:{display:"flex",justifyContent:"space-around",gap:16,marginBottom:"1.5rem"}},
-          ...[
-            {label:"Calories",val:totals.cal,    target:TARGETS.cal,    unit:"kcal",color:"#7ab8f5",track:"#0b1e35"},
-            {label:"Protein", val:totals.protein,target:TARGETS.protein,unit:"g",   color:"#8ec94a",track:"#141f07"},
-          ].map(({label,val,target,unit,color,track})=>
-            h("div",{key:label,style:{display:"flex",flexDirection:"column",alignItems:"center",gap:7,flex:"1 1 0"}},
-              h(Ring,{value:val,target,color,track,size:110,sw:10}),
-              h("div",{style:{fontSize:20,fontWeight:600,color:D.text}},Math.round(val),h("span",{style:{fontSize:12,color:D.muted,fontWeight:400}},unit)),
-              h("div",{style:{fontSize:12,color:D.muted}},label),
-              h("div",{style:{fontSize:11,color:"#3a3a36"}},"of "+target+unit)
-            )
-          )
+
+      // ── Nutrition: Today ──────────────────────────────────
+      nutTab==="today"&&h("div",null,
+        h("div",{style:{display:"flex",alignItems:"center",gap:8,marginBottom:12}},
+          h("button",{onClick:()=>goDate(-1),style:{background:"transparent",border:`0.5px solid ${D.border}`,color:D.muted,borderRadius:8,padding:"4px 13px",fontSize:16,lineHeight:1}},"‹"),
+          h("input",{type:"date",value:viewDate,max:today,onChange:e=>e.target.value&&setVD(e.target.value),
+            style:{background:D.card,border:`0.5px solid ${D.border}`,color:D.text,borderRadius:8,padding:"5px 10px",fontSize:12,fontFamily:"inherit",flex:1,colorScheme:"dark"}}),
+          viewDate<today&&h("button",{onClick:()=>setVD(today),style:{fontSize:11,padding:"5px 12px",borderRadius:8,background:D.accent,color:D.accentText,border:"none",fontWeight:600,whiteSpace:"nowrap"}},"Today"),
+          h("button",{onClick:()=>goDate(1),disabled:viewDate>=today,style:{background:"transparent",border:`0.5px solid ${D.border}`,color:viewDate>=today?D.hint:D.muted,borderRadius:8,padding:"4px 13px",fontSize:16,lineHeight:1}},"›")
         ),
-        h("div",{style:{display:"flex",justifyContent:"space-around",gap:10,paddingTop:"1rem",borderTop:`0.5px solid ${D.border}`}},
-          ...[
-            {label:"Carbs", val:totals.carbs, target:TARGETS.carbs, unit:"g", color:"#e8a84a",track:"#271a05"},
-            {label:"Fat",   val:totals.fat,   target:TARGETS.fat,   unit:"g", color:"#d97aaa",track:"#220a18"},
-            {label:"Fiber", val:totals.fiber, target:TARGETS.fiber, unit:"g", color:"#4ac9b0",track:"#082820"},
-          ].map(({label,val,target,unit,color,track})=>
-            h("div",{key:label,style:{display:"flex",flexDirection:"column",alignItems:"center",gap:5,flex:"1 1 0"}},
-              h(Ring,{value:val,target,color,track,size:76,sw:7}),
-              h("div",{style:{fontSize:14,fontWeight:600,color:D.text}},Math.round(val),h("span",{style:{fontSize:10,color:D.muted,fontWeight:400}},unit)),
-              h("div",{style:{fontSize:11,color:D.muted}},label),
-              h("div",{style:{fontSize:10,color:"#3a3a36"}},"of "+target+unit)
-            )
-          )
-        )
-      ),
-      h("div",{style:card},
-        h("div",{style:sHead},"Full breakdown"),
-        h(Bar,{label:"Calories",value:totals.cal,    target:TARGETS.cal,    color:"#7ab8f5"}),
-        h(Bar,{label:"Protein", value:totals.protein,target:TARGETS.protein,color:"#8ec94a"}),
-        h(Bar,{label:"Carbs",   value:totals.carbs,  target:TARGETS.carbs,  color:"#e8a84a"}),
-        h(Bar,{label:"Fat",     value:totals.fat,    target:TARGETS.fat,    color:"#d97aaa"}),
-        h(Bar,{label:"Fiber",   value:totals.fiber,  target:TARGETS.fiber,  color:"#4ac9b0"})
-      ),
-      h("div",{style:{...card,background:"#131311"}},
-        h("div",{style:sHead},"Remaining today"),
-        h("div",{style:{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(110px,1fr))",gap:10}},
-          ...[
-            {label:"Calories",val:TARGETS.cal-totals.cal,        unit:"kcal",color:"#7ab8f5"},
-            {label:"Protein", val:TARGETS.protein-totals.protein,unit:"g",   color:"#8ec94a"},
-            {label:"Carbs",   val:TARGETS.carbs-totals.carbs,    unit:"g",   color:"#e8a84a"},
-            {label:"Fat",     val:TARGETS.fat-totals.fat,        unit:"g",   color:"#d97aaa"},
-            {label:"Fiber",   val:TARGETS.fiber-totals.fiber,    unit:"g",   color:"#4ac9b0"},
-          ].map(({label,val,unit,color})=>{
-            const over=val<0, done=val===0;
-            return h("div",{key:label,style:{background:D.surface,borderRadius:10,padding:"11px 13px"}},
-              h("div",{style:{fontSize:11,color:D.muted,marginBottom:5}},label),
-              h("div",{style:{fontSize:18,fontWeight:600,color:done?D.accent:over?"#ff9f43":color}},
-                done?"✓":over?`+${Math.round(Math.abs(val))}${unit}`:`${Math.round(val)}${unit}`)
-            );
-          })
-        )
-      ),
-      (()=>{
-        const proKcal=totals.protein*4, carbKcal=totals.carbs*4, fatKcal=totals.fat*9;
-        const macroTotal=proKcal+carbKcal+fatKcal;
-        if(macroTotal<1) return null;
-        const proW=(proKcal/macroTotal*100).toFixed(1);
-        const carbW=(carbKcal/macroTotal*100).toFixed(1);
-        const fatW=(fatKcal/macroTotal*100).toFixed(1);
-        return h("div",{style:card},
-          h("div",{style:sHead},"Macro split — caloric contribution"),
-          h("div",{style:{display:"flex",height:10,borderRadius:6,overflow:"hidden",marginBottom:12}},
-            h("div",{style:{width:`${proW}%`,background:"#8ec94a"}}),
-            h("div",{style:{width:`${carbW}%`,background:"#e8a84a"}}),
-            h("div",{style:{width:`${fatW}%`,background:"#d97aaa"}})
-          ),
-          h("div",{style:{display:"flex",gap:16,flexWrap:"wrap"}},
+        // Macro rings
+        h("div",{style:{...card,padding:"1.25rem 1rem"}},
+          h("div",{style:{display:"flex",justifyContent:"space-around",gap:16,marginBottom:"1.5rem"}},
             ...[
-              {label:"Protein",pct:proW,kcal:Math.round(proKcal),color:"#8ec94a"},
-              {label:"Carbs",  pct:carbW,kcal:Math.round(carbKcal),color:"#e8a84a"},
-              {label:"Fat",    pct:fatW,kcal:Math.round(fatKcal),color:"#d97aaa"},
-            ].map(({label,pct,kcal,color})=>
-              h("div",{key:label,style:{display:"flex",alignItems:"center",gap:6}},
-                h("div",{style:{width:8,height:8,borderRadius:2,background:color,flexShrink:0}}),
-                h("span",{style:{fontSize:12,color:D.text}},label),
-                h("span",{style:{fontSize:12,color:D.muted}},`${pct}% · ${kcal} kcal`)
+              {label:"Calories",val:totals.cal,    target:TARGETS.cal,    unit:"kcal",color:COLORS.cal,    track:COLORS.calBg},
+              {label:"Protein", val:totals.protein,target:TARGETS.protein,unit:"g",   color:COLORS.protein,track:COLORS.proteinBg},
+            ].map(({label,val,target,unit,color,track})=>
+              h("div",{key:label,style:{display:"flex",flexDirection:"column",alignItems:"center",gap:7,flex:"1 1 0"}},
+                h(Ring,{value:val,target,color,track,size:110,sw:10}),
+                h("div",{style:{fontSize:20,fontWeight:600,color:D.text}},Math.round(val),h("span",{style:{fontSize:12,color:D.muted,fontWeight:400}},unit)),
+                h("div",{style:{fontSize:12,color:D.muted}},label),
+                h("div",{style:{fontSize:11,color:"#3a3a36"}},"of "+target+unit)
+              )
+            )
+          ),
+          h("div",{style:{display:"flex",justifyContent:"space-around",gap:10,paddingTop:"1rem",borderTop:`0.5px solid ${D.border}`}},
+            ...[
+              {label:"Carbs", val:totals.carbs, target:TARGETS.carbs, unit:"g", color:COLORS.carbs, track:COLORS.carbsBg},
+              {label:"Fat",   val:totals.fat,   target:TARGETS.fat,   unit:"g", color:COLORS.fat,   track:COLORS.fatBg},
+              {label:"Fiber", val:totals.fiber, target:TARGETS.fiber, unit:"g", color:COLORS.fiber, track:COLORS.fiberBg},
+            ].map(({label,val,target,unit,color,track})=>
+              h("div",{key:label,style:{display:"flex",flexDirection:"column",alignItems:"center",gap:5,flex:"1 1 0"}},
+                h(Ring,{value:val,target,color,track,size:76,sw:7}),
+                h("div",{style:{fontSize:14,fontWeight:600,color:D.text}},Math.round(val),h("span",{style:{fontSize:10,color:D.muted,fontWeight:400}},unit)),
+                h("div",{style:{fontSize:11,color:D.muted}},label),
+                h("div",{style:{fontSize:10,color:"#3a3a36"}},"of "+target+unit)
               )
             )
           )
-        );
-      })(),
-      h("div",{style:card},
-        h("div",{style:sHead},"Today's meals"),
-        viewMeals.length===0
-          ?h(Empty,{icon:"🥗",text:viewDate===todayStr()?"No meals logged yet. Tell Claude what you ate.":"No meals logged on this day."})
-          :viewMeals.map((m,i)=>h(MealRow,{key:m.id||i,meal:m}))
-      )
-    ),
-
-    // LOG
-    !loading&&tab==="log"&&h("div",{className:"fade"},
-      Object.keys(byDate).length===0
-        ?h("div",{style:card},h(Empty,{icon:"📋",text:"Your full meal history will appear here."}))
-        :Object.entries(byDate).sort((a,b)=>b[0].localeCompare(a[0])).map(([date,meals])=>{
-            const dt=meals.reduce((a,m)=>({cal:a.cal+m.cal,protein:a.protein+m.protein}),{cal:0,protein:0});
-            const isToday=date===todayStr(), open=expanded.has(date);
-            return h("div",{key:date,style:{...card,border:`0.5px solid ${isToday?D.accent:D.border}`,marginBottom:8}},
-              h("div",{onClick:()=>toggleDay(date),style:{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer",marginBottom:open?10:0}},
-                h("div",{style:{display:"flex",alignItems:"center",gap:8}},
-                  h("span",{style:{fontSize:13,color:D.muted,transition:"transform 0.2s",display:"inline-block",transform:open?"rotate(90deg)":"rotate(0deg)"}},"›"),
-                  h("span",{style:{fontSize:13,fontWeight:600,color:isToday?D.accent:D.text}},fmtDate(date)),
-                  isToday&&h("span",{style:{fontSize:10,color:D.accentText,background:D.accent,borderRadius:6,padding:"1px 7px",fontWeight:600}},"Today")
-                ),
-                h("div",{style:{display:"flex",gap:6}},
-                  h(Pill,{label:`${Math.round(dt.cal)} kcal`,    color:"#7ab8f5",bg:"#0b1e35"}),
-                  h(Pill,{label:`${Math.round(dt.protein)}g pro`,color:"#8ec94a",bg:"#141f07"})
+        ),
+        // Full breakdown bars
+        h("div",{style:card},
+          h("div",{style:sHead},"Full breakdown"),
+          h(Bar,{label:"Calories",value:totals.cal,    target:TARGETS.cal,    color:COLORS.cal}),
+          h(Bar,{label:"Protein", value:totals.protein,target:TARGETS.protein,color:COLORS.protein}),
+          h(Bar,{label:"Carbs",   value:totals.carbs,  target:TARGETS.carbs,  color:COLORS.carbs}),
+          h(Bar,{label:"Fat",     value:totals.fat,    target:TARGETS.fat,    color:COLORS.fat}),
+          h(Bar,{label:"Fiber",   value:totals.fiber,  target:TARGETS.fiber,  color:COLORS.fiber})
+        ),
+        // Remaining
+        h("div",{style:{...card,background:"#131311"}},
+          h("div",{style:sHead},"Remaining today"),
+          h("div",{style:{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(100px,1fr))",gap:10}},
+            ...[
+              {label:"Calories",val:TARGETS.cal-totals.cal,        unit:"kcal",color:COLORS.cal},
+              {label:"Protein", val:TARGETS.protein-totals.protein,unit:"g",   color:COLORS.protein},
+              {label:"Carbs",   val:TARGETS.carbs-totals.carbs,    unit:"g",   color:COLORS.carbs},
+              {label:"Fat",     val:TARGETS.fat-totals.fat,        unit:"g",   color:COLORS.fat},
+              {label:"Fiber",   val:TARGETS.fiber-totals.fiber,    unit:"g",   color:COLORS.fiber},
+            ].map(({label,val,unit,color})=>{
+              const over=val<0, done=val===0;
+              return h("div",{key:label,style:{background:D.surface,borderRadius:10,padding:"11px 13px"}},
+                h("div",{style:{fontSize:11,color:D.muted,marginBottom:5}},label),
+                h("div",{style:{fontSize:18,fontWeight:600,color:done?D.accent:over?"#ff9f43":color}},
+                  done?"✓":over?`+${Math.round(Math.abs(val))}${unit}`:`${Math.round(val)}${unit}`)
+              );
+            })
+          )
+        ),
+        // Macro split bar
+        (()=>{
+          const proKcal=totals.protein*4, carbKcal=totals.carbs*4, fatKcal=totals.fat*9;
+          const macroTotal=proKcal+carbKcal+fatKcal;
+          if(macroTotal<1) return null;
+          const proW=(proKcal/macroTotal*100).toFixed(1), carbW=(carbKcal/macroTotal*100).toFixed(1), fatW=(fatKcal/macroTotal*100).toFixed(1);
+          return h("div",{style:card},
+            h("div",{style:sHead},"Macro split — caloric contribution"),
+            h("div",{style:{display:"flex",height:10,borderRadius:6,overflow:"hidden",marginBottom:12}},
+              h("div",{style:{width:`${proW}%`,background:COLORS.protein}}),
+              h("div",{style:{width:`${carbW}%`,background:COLORS.carbs}}),
+              h("div",{style:{width:`${fatW}%`,background:COLORS.fat}})
+            ),
+            h("div",{style:{display:"flex",gap:16,flexWrap:"wrap"}},
+              ...[
+                {label:"Protein",pct:proW,kcal:Math.round(proKcal),color:COLORS.protein},
+                {label:"Carbs",  pct:carbW,kcal:Math.round(carbKcal),color:COLORS.carbs},
+                {label:"Fat",    pct:fatW,kcal:Math.round(fatKcal),color:COLORS.fat},
+              ].map(({label,pct,kcal,color})=>
+                h("div",{key:label,style:{display:"flex",alignItems:"center",gap:6}},
+                  h("div",{style:{width:8,height:8,borderRadius:2,background:color,flexShrink:0}}),
+                  h("span",{style:{fontSize:12,color:D.text}},label),
+                  h("span",{style:{fontSize:12,color:D.muted}},`${pct}% · ${kcal} kcal`)
                 )
-              ),
-              open&&h("div",null,...meals.map((m,i)=>h(MealRow,{key:m.id||i,meal:m})))
-            );
-          })
-    ),
-
-    // HISTORY
-    !loading&&tab==="history"&&h("div",{className:"fade"},
-      h("div",{style:card},
-        h("div",{style:sHead},"Last 7 days — protein"),
-        ...last7.map(key=>{
-          const pro=Math.round((byDate[key]||[]).reduce((s,m)=>s+m.protein,0));
-          const pct=Math.min((pro/TARGETS.protein)*100,100);
-          const hit=pro>=TARGETS.protein*0.8, isToday=key===todayStr(), hasData=pro>0;
-          const barColor=hit?"#8ec94a":"#3a3a36";
-          return h("div",{key,style:{display:"flex",alignItems:"center",gap:10,marginBottom:10}},
-            h("div",{style:{width:52,flexShrink:0}},
-              h("span",{style:{fontSize:11,color:isToday?D.accent:D.muted,fontWeight:isToday?600:400}},
-                new Date(key+"T12:00:00").toLocaleDateString("en-IN",{weekday:"short"}))
-            ),
-            h("div",{style:{flex:1,height:6,background:D.hint,borderRadius:3,overflow:"hidden"}},
-              h("div",{style:{width:`${pct}%`,height:"100%",background:barColor,borderRadius:3,transition:"width 0.6s ease"}})
-            ),
-            h("div",{style:{width:72,flexShrink:0,textAlign:"right",display:"flex",alignItems:"center",justifyContent:"flex-end",gap:5}},
-              hasData
-                ? h(Fragment,null,
-                    h("span",{style:{fontSize:11,color:D.muted}},`${pro}/${TARGETS.protein}g`),
-                    hit&&h("span",{style:{fontSize:11,color:"#8ec94a"}},"✓")
-                  )
-                : h("span",{style:{fontSize:11,color:"#2a2a26"}},"—")
+              )
             )
           );
-        })
+        })(),
+        // Meals list
+        h("div",{style:card},
+          h("div",{style:sHead},"Today's meals"),
+          viewMeals.length===0
+            ?h(Empty,{icon:"🥗",text:viewDate===today?"No meals logged yet. Tell Claude what you ate.":"No meals logged on this day."})
+            :viewMeals.map((m,i)=>h(MealRow,{key:m.id||i,meal:m}))
+        )
       ),
-      h("div",{style:card},
-        h("div",{style:sHead},"7-day average (cheat days excluded)"),
+
+      // ── Nutrition: Log ────────────────────────────────────
+      nutTab==="log"&&h("div",null,
+        Object.keys(byDate).length===0
+          ?h("div",{style:card},h(Empty,{icon:"📋",text:"Your full meal history will appear here."}))
+          :Object.entries(byDate).sort((a,b)=>b[0].localeCompare(a[0])).map(([date,meals])=>{
+              const dt=meals.reduce((a,m)=>({cal:a.cal+m.cal,protein:a.protein+m.protein}),{cal:0,protein:0});
+              const isToday=date===today, open=expanded.has(date);
+              return h("div",{key:date,style:{...card,border:`0.5px solid ${isToday?D.accent:D.border}`,marginBottom:8}},
+                h("div",{onClick:()=>toggleDay(date),style:{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer",marginBottom:open?10:0}},
+                  h("div",{style:{display:"flex",alignItems:"center",gap:8}},
+                    h("span",{style:{fontSize:13,color:D.muted,transition:"transform 0.2s",display:"inline-block",transform:open?"rotate(90deg)":"rotate(0deg)"}},"›"),
+                    h("span",{style:{fontSize:13,fontWeight:600,color:isToday?D.accent:D.text}},fmtDate(date)),
+                    isToday&&h("span",{style:{fontSize:10,color:D.accentText,background:D.accent,borderRadius:6,padding:"1px 7px",fontWeight:600}},"Today")
+                  ),
+                  h("div",{style:{display:"flex",gap:6}},
+                    h(Pill,{label:`${Math.round(dt.cal)} kcal`,    color:COLORS.cal,    bg:COLORS.calBg}),
+                    h(Pill,{label:`${Math.round(dt.protein)}g pro`,color:COLORS.protein,bg:COLORS.proteinBg})
+                  )
+                ),
+                open&&h("div",null,...meals.map((m,i)=>h(MealRow,{key:m.id||i,meal:m})))
+              );
+            })
+      ),
+
+      // ── Nutrition: History ────────────────────────────────
+      nutTab==="history"&&h("div",null,
+        h("div",{style:card},
+          h("div",{style:sHead},"Last 7 days — protein"),
+          ...last7.map(key=>{
+            const pro=Math.round((byDate[key]||[]).reduce((s,m)=>s+m.protein,0));
+            const pct=Math.min((pro/TARGETS.protein)*100,100);
+            const hit=pro>=TARGETS.protein*0.8, isToday=key===today, hasData=pro>0;
+            return h("div",{key,style:{display:"flex",alignItems:"center",gap:10,marginBottom:10}},
+              h("div",{style:{width:52,flexShrink:0}},
+                h("span",{style:{fontSize:11,color:isToday?D.accent:D.muted,fontWeight:isToday?600:400}},
+                  new Date(key+"T12:00:00").toLocaleDateString("en-IN",{weekday:"short"}))),
+              h("div",{style:{flex:1,height:6,background:D.hint,borderRadius:3,overflow:"hidden"}},
+                h("div",{style:{width:`${pct}%`,height:"100%",background:hit?"#8ec94a":"#3a3a36",borderRadius:3}})),
+              h("div",{style:{width:72,flexShrink:0,textAlign:"right",display:"flex",alignItems:"center",justifyContent:"flex-end",gap:5}},
+                hasData?h(Fragment,null,h("span",{style:{fontSize:11,color:D.muted}},`${pro}/${TARGETS.protein}g`),hit&&h("span",{style:{fontSize:11,color:"#8ec94a"}},"✓"))
+                       :h("span",{style:{fontSize:11,color:"#2a2a26"}},"—"))
+            );
+          })
+        ),
+        h("div",{style:card},
+          h("div",{style:sHead},"7-day average (cheat days excluded)"),
+          (()=>{
+            const active=last7.filter(k=>byDate[k]&&!cheatDays.has(k));
+            if(!active.length) return h(Empty,{icon:"📊",text:"Log a few days to see averages."});
+            const avg=k=>Math.round(active.reduce((s,d)=>s+byDate[d].reduce((a,m)=>a+(m[k]||0),0),0)/active.length);
+            return h(Fragment,null,
+              h(Bar,{label:"Calories",value:avg("cal"),    target:TARGETS.cal,    color:COLORS.cal}),
+              h(Bar,{label:"Protein", value:avg("protein"),target:TARGETS.protein,color:COLORS.protein}),
+              h(Bar,{label:"Carbs",   value:avg("carbs"),  target:TARGETS.carbs,  color:COLORS.carbs}),
+              h(Bar,{label:"Fat",     value:avg("fat"),    target:TARGETS.fat,    color:COLORS.fat}),
+              h(Bar,{label:"Fiber",   value:avg("fiber"),  target:TARGETS.fiber,  color:COLORS.fiber})
+            );
+          })()
+        ),
+        h("div",{style:card},
+          h("div",{style:sHead},"Daily calories — last 7 days"),
+          ...last7.map(key=>{
+            const cal=Math.round((byDate[key]||[]).reduce((s,m)=>s+m.cal,0));
+            const pct=Math.min((cal/TARGETS.cal)*100,100);
+            return h("div",{key,style:{display:"flex",alignItems:"center",gap:10,marginBottom:9}},
+              h("span",{style:{fontSize:11,color:D.muted,width:46,flexShrink:0}},new Date(key+"T12:00:00").toLocaleDateString("en-IN",{weekday:"short"})),
+              h("div",{style:{flex:1,height:6,background:D.hint,borderRadius:3,overflow:"hidden"}},
+                h("div",{style:{width:`${pct}%`,height:"100%",background:COLORS.cal,borderRadius:3}})),
+              h("span",{style:{fontSize:11,color:D.muted,width:60,textAlign:"right"}},cal>0?`${cal} kcal`:"—")
+            );
+          })
+        ),
+        // 30-day heatmap
         (()=>{
-          const active=last7.filter(k=>byDate[k]&&!cheatDays.has(k));
-          if(!active.length) return h(Empty,{icon:"📊",text:"Log a few days to see averages."});
-          const avg=k=>Math.round(active.reduce((s,d)=>s+byDate[d].reduce((a,m)=>a+(m[k]||0),0),0)/active.length);
-          return h(Fragment,null,
-            h(Bar,{label:"Calories",value:avg("cal"),    target:TARGETS.cal,    color:"#7ab8f5"}),
-            h(Bar,{label:"Protein", value:avg("protein"),target:TARGETS.protein,color:"#8ec94a"}),
-            h(Bar,{label:"Carbs",   value:avg("carbs"),  target:TARGETS.carbs,  color:"#e8a84a"}),
-            h(Bar,{label:"Fat",     value:avg("fat"),    target:TARGETS.fat,    color:"#d97aaa"})
+          const todayDt=new Date(today+"T12:00:00");
+          const days30=Array.from({length:30},(_,i)=>{ const d=new Date(todayDt); d.setDate(d.getDate()-(29-i)); return d.toISOString().split("T")[0]; });
+          const cellColor=key=>{
+            if(cheatDays.has(key)) return "#6b4fa0";
+            const meals=byDate[key]||[];
+            if(!meals.length) return D.hint;
+            const cal=meals.reduce((s,m)=>s+m.cal,0), pro=meals.reduce((s,m)=>s+m.protein,0);
+            const score=Math.min(cal/TARGETS.cal,1)*0.5+Math.min(pro/TARGETS.protein,1)*0.5;
+            if(score>=0.9) return "#5a9e2f"; if(score>=0.6) return "#8ec94a"; if(score>=0.3) return "#c8a840"; return "#4a3a20";
+          };
+          const DOW=["M","T","W","T","F","S","S"];
+          const offset=(new Date(days30[0]+"T12:00:00").getDay()+6)%7;
+          const cells=[...Array(offset).fill(null),...days30];
+          return h("div",{style:card},
+            h("div",{style:sHead},"30-day log heatmap"),
+            h("div",{style:{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:4,marginBottom:8}},
+              ...DOW.map((d,i)=>h("div",{key:i,style:{textAlign:"center",fontSize:10,color:D.muted}},d))),
+            h("div",{style:{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:4}},
+              ...cells.map((key,i)=>
+                key===null?h("div",{key:"e"+i,style:{aspectRatio:"1",borderRadius:3}})
+                :h("div",{key,title:key,style:{aspectRatio:"1",borderRadius:3,background:cellColor(key),outline:key===today?`1.5px solid ${D.accent}`:"none"}})
+              )),
+            h("div",{style:{display:"flex",gap:12,marginTop:10,alignItems:"center",flexWrap:"wrap"}},
+              ...[["#5a9e2f","≥90%"],["#8ec94a","≥60%"],["#c8a840","≥30%"],["#4a3a20","<30%"],["#6b4fa0","❄️ Cheat"],[D.hint,"No data"]]
+                .map(([color,label])=>h("div",{key:label,style:{display:"flex",alignItems:"center",gap:4}},
+                  h("div",{style:{width:10,height:10,borderRadius:2,background:color}}),
+                  h("span",{style:{fontSize:10,color:D.muted}},label)))
+            )
           );
         })()
       ),
-      h("div",{style:card},
-        h("div",{style:sHead},"Daily calories — last 7 days"),
-        ...last7.map(key=>{
-          const cal=Math.round((byDate[key]||[]).reduce((s,m)=>s+m.cal,0));
-          const pct=Math.min((cal/TARGETS.cal)*100,100);
-          return h("div",{key,style:{display:"flex",alignItems:"center",gap:10,marginBottom:9}},
-            h("span",{style:{fontSize:11,color:D.muted,width:46,flexShrink:0}}, new Date(key+"T12:00:00").toLocaleDateString("en-IN",{weekday:"short"})),
-            h("div",{style:{flex:1,height:6,background:D.hint,borderRadius:3,overflow:"hidden"}},
-              h("div",{style:{width:`${pct}%`,height:"100%",background:"#7ab8f5",borderRadius:3,transition:"width 0.6s ease"}})),
-            h("span",{style:{fontSize:11,color:D.muted,width:60,textAlign:"right"}}, cal>0?`${cal} kcal`:"—")
-          );
-        })
-      ),
-      (()=>{
-        // 30-day calendar heatmap
-        const today=todayStr(), todayDt=new Date(today+"T12:00:00");
-        const days30=Array.from({length:30},(_,i)=>{ const d=new Date(todayDt); d.setDate(d.getDate()-(29-i)); return d.toISOString().split("T")[0]; });
-        const cellColor=key=>{
-          if(cheatDays.has(key)) return "#6b4fa0";  // purple = cheat day
-          const meals=byDate[key]||[];
-          if(!meals.length) return D.hint;
-          const cal=meals.reduce((s,m)=>s+m.cal,0);
-          const pro=meals.reduce((s,m)=>s+m.protein,0);
-          const calPct=cal/TARGETS.cal, proPct=pro/TARGETS.protein;
-          const score=Math.min(calPct,1)*0.5+Math.min(proPct,1)*0.5;
-          if(score>=0.9) return "#5a9e2f";
-          if(score>=0.6) return "#8ec94a";
-          if(score>=0.3) return "#c8a840";
-          return "#4a3a20";
-        };
-        // week labels: Mon-Sun header
-        const DOW=["M","T","W","T","F","S","S"];
-        // first day of week for alignment
-        const firstDow=new Date(days30[0]+"T12:00:00").getDay(); // 0=Sun
-        const offset=(firstDow+6)%7; // offset so Mon=0
-        const cells=[...Array(offset).fill(null),...days30];
-        return h("div",{style:card},
-          h("div",{style:sHead},"30-day log heatmap"),
-          h("div",{style:{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:4,marginBottom:8}},
-            ...DOW.map((d,i)=>h("div",{key:i,style:{textAlign:"center",fontSize:10,color:D.muted}},d))
-          ),
-          h("div",{style:{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:4}},
-            ...cells.map((key,i)=>
-              key===null
-                ? h("div",{key:"e"+i,style:{aspectRatio:"1",borderRadius:3}})
-                : h("div",{key,title:key,style:{
-                    aspectRatio:"1",borderRadius:3,
-                    background:cellColor(key),
-                    outline:key===today?`1.5px solid ${D.accent}`:"none",
-                  }})
-            )
-          ),
-          h("div",{style:{display:"flex",gap:12,marginTop:10,alignItems:"center",flexWrap:"wrap"}},
-            ...[ ["#5a9e2f","≥90% targets"],["#8ec94a","≥60%"],["#c8a840","≥30%"],["#4a3a20","< 30%"],["#6b4fa0","❄️ Cheat day"],[D.hint,"No data"] ]
-              .map(([color,label])=>h("div",{key:label,style:{display:"flex",alignItems:"center",gap:4}},
-                h("div",{style:{width:10,height:10,borderRadius:2,background:color}}),
-                h("span",{style:{fontSize:10,color:D.muted}},label)
-              ))
-          )
-        );
-      })()
-    ),
 
-    // SOURCES
-    !loading&&tab==="sources"&&h("div",{className:"fade"},
-      h("div",{style:card},
-        h("div",{style:sHead},"Top protein sources — all time"),
-        topSources.length===0
-          ?h(Empty,{icon:"🍗",text:"Log a few meals to see your top sources."})
+      // ── Nutrition: Sources ────────────────────────────────
+      nutTab==="sources"&&h("div",null,
+        h("div",{style:card},
+          h("div",{style:sHead},"Top protein sources — all time"),
+          topSources.length===0?h(Empty,{icon:"🍗",text:"Log a few meals to see your top sources."})
           :topSources.map(([name,val])=>
             h("div",{key:name,style:{display:"flex",alignItems:"center",gap:10,marginBottom:11}},
               h("span",{style:{fontSize:12,color:D.text,width:110,flexShrink:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},name),
               h("div",{style:{flex:1,height:6,background:D.hint,borderRadius:3,overflow:"hidden"}},
-                h("div",{style:{width:`${Math.round((val/topSources[0][1])*100)}%`,height:"100%",background:"#8ec94a",borderRadius:3}})),
+                h("div",{style:{width:`${Math.round((val/topSources[0][1])*100)}%`,height:"100%",background:COLORS.protein,borderRadius:3}})),
               h("span",{style:{fontSize:11,color:D.muted,width:80,textAlign:"right",flexShrink:0}},
                 `${Math.round(val)}g · ${grandTotal>0?Math.round((val/grandTotal)*100):0}%`)
             )
           )
-      ),
-      topSources.length>0&&h("div",{style:card},
-        h("div",{style:sHead},"Avg daily share — on days eaten"),
-        topSources.map(([name])=>
-          h("div",{key:name,style:{display:"flex",alignItems:"center",gap:10,marginBottom:11}},
-            h("span",{style:{fontSize:12,color:D.text,width:110,flexShrink:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},name),
-            h("div",{style:{flex:1,height:6,background:D.hint,borderRadius:3,overflow:"hidden"}},
-              h("div",{style:{width:`${avgDayPct[name]}%`,height:"100%",background:"#c8a84a",borderRadius:3}})),
-            h("span",{style:{fontSize:11,color:D.muted,width:80,textAlign:"right",flexShrink:0}},`${avgDayPct[name]}% of day`)
+        ),
+        topSources.length>0&&h("div",{style:card},
+          h("div",{style:sHead},"Avg daily share — on days eaten"),
+          topSources.map(([name])=>
+            h("div",{key:name,style:{display:"flex",alignItems:"center",gap:10,marginBottom:11}},
+              h("span",{style:{fontSize:12,color:D.text,width:110,flexShrink:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},name),
+              h("div",{style:{flex:1,height:6,background:D.hint,borderRadius:3,overflow:"hidden"}},
+                h("div",{style:{width:`${avgDayPct[name]}%`,height:"100%",background:"#c8a84a",borderRadius:3}})),
+              h("span",{style:{fontSize:11,color:D.muted,width:80,textAlign:"right",flexShrink:0}},`${avgDayPct[name]}% of day`)
+            )
           )
-        )
-      ),
-      h("div",{style:card},
-        h("div",{style:sHead},"Meal timing pattern"),
-        history.length<3
-          ?h(Empty,{icon:"🕐",text:"Timing patterns appear after a few days of logging."})
+        ),
+        h("div",{style:card},
+          h("div",{style:sHead},"Meal timing pattern"),
+          history.length<3?h(Empty,{icon:"🕐",text:"Timing patterns appear after a few days of logging."})
           :(()=>{
               const slots={Morning:0,Afternoon:0,Evening:0,Night:0};
               history.forEach(m=>{ const hh=parseInt((m.meal_time||"12:00").split(":")[0]); if(hh<11)slots.Morning++; else if(hh<15)slots.Afternoon++; else if(hh<20)slots.Evening++; else slots.Night++; });
@@ -594,16 +655,234 @@ function App(){
                 h("div",{key:slot,style:{display:"flex",alignItems:"center",gap:10,marginBottom:11}},
                   h("span",{style:{fontSize:12,color:D.text,width:80,flexShrink:0}},slot),
                   h("div",{style:{flex:1,height:6,background:D.hint,borderRadius:3,overflow:"hidden"}},
-                    h("div",{style:{width:`${Math.round((count/max)*100)}%`,height:"100%",background:"#e8a84a",borderRadius:3}})),
+                    h("div",{style:{width:`${Math.round((count/max)*100)}%`,height:"100%",background:COLORS.carbs,borderRadius:3}})),
                   h("span",{style:{fontSize:11,color:D.muted,width:52,textAlign:"right"}},count+" meals")
                 )
               ));
             })()
+        )
+      )
+    ),
+
+    // ═══════════════════════════════════════════════════════
+    // ACTIVITY TAB
+    // ═══════════════════════════════════════════════════════
+    !loading&&mainTab==="activity"&&h("div",{className:"fade"},
+
+      // Streak cards
+      h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}},
+        h("div",{style:{...card,marginBottom:0}},
+          h("div",{style:{fontSize:11,color:D.muted,marginBottom:4}},"Activity streak"),
+          h("div",{style:{fontSize:24,fontWeight:600,color:D.text}},actStreak,
+            h("span",{style:{fontSize:12,color:D.muted,fontWeight:400,marginLeft:4}},"days")),
+          h("div",{style:{fontSize:11,color:D.muted,marginTop:2}},
+            `❄️ ${actFreezeBal}/2 freezes`)
+        ),
+        h("div",{style:{...card,marginBottom:0}},
+          h("div",{style:{fontSize:11,color:D.muted,marginBottom:4}},"Today's burn"),
+          h("div",{style:{fontSize:24,fontWeight:600,color:actTotals.burned>0?COLORS.act:D.muted}},
+            actTotals.burned,h("span",{style:{fontSize:12,color:D.muted,fontWeight:400,marginLeft:2}},"kcal")),
+          h("div",{style:{fontSize:11,color:D.muted,marginTop:2}},
+            actTotals.valid>0?`${actTotals.valid} valid activit${actTotals.valid===1?"y":"ies"} ✓`:"No valid activity yet")
+        )
+      ),
+
+      // Today's activities
+      h("div",{style:card},
+        h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}},
+          h("div",{style:sHead,marginBottom:0},"Today's activities"),
+          h("div",{style:{fontSize:11,color:D.muted}},
+            viewDate===today?"":"Viewing "+fmtDate(viewDate))
+        ),
+        acts.length===0?h(Empty,{icon:"🏃",text:"No activities logged today.\nUse /workout in the bot to log one."})
+        :acts.map((a,i)=>h(ActivityRow,{key:a.id||i,act:a}))
+      ),
+
+      // Weekly calories burned
+      h("div",{style:card},
+        h("div",{style:sHead},"Calories burned — last 7 days"),
+        ...last7.map(key=>{
+          const burned = (actByDate[key]||[]).reduce((s,a)=>s+(a.calories_burned||0),0);
+          const pct = Math.min((burned/Math.max(ACT_GOAL,1))*100, 100);
+          const valid = (actByDate[key]||[]).some(a=>a.calories_burned>=ACT_MIN);
+          const isToday = key===today;
+          // Show activity icons for the day
+          const dayActs = actByDate[key]||[];
+          const icons = [...new Set(dayActs.map(a=>actIcon(a.activity)))].slice(0,3).join(" ");
+          return h("div",{key,style:{display:"flex",alignItems:"center",gap:10,marginBottom:10}},
+            h("div",{style:{width:46,flexShrink:0}},
+              h("span",{style:{fontSize:11,color:isToday?D.accent:D.muted,fontWeight:isToday?600:400}},
+                new Date(key+"T12:00:00").toLocaleDateString("en-IN",{weekday:"short"}))),
+            h("div",{style:{flex:1,height:6,background:D.hint,borderRadius:3,overflow:"hidden"}},
+              h("div",{style:{width:`${pct}%`,height:"100%",background:valid?"#a78bfa":"#3a3a36",borderRadius:3,transition:"width 0.6s ease"}})),
+            h("div",{style:{width:80,flexShrink:0,textAlign:"right",display:"flex",alignItems:"center",justifyContent:"flex-end",gap:5}},
+              burned>0?h(Fragment,null,
+                icons&&h("span",{style:{fontSize:11}},icons),
+                h("span",{style:{fontSize:11,color:D.muted}},`${burned}`)
+              ):h("span",{style:{fontSize:11,color:"#2a2a26"}},"—"))
+          );
+        }),
+        h("div",{style:{display:"flex",gap:12,marginTop:8,flexWrap:"wrap"}},
+          ...[["#a78bfa","≥150 kcal (valid)"],["#3a3a36","< 150 kcal"],["#2a2a26","No activity"]]
+            .map(([color,label])=>h("div",{key:label,style:{display:"flex",alignItems:"center",gap:4}},
+              h("div",{style:{width:10,height:6,borderRadius:3,background:color}}),
+              h("span",{style:{fontSize:10,color:D.muted}},label)))
+        )
+      ),
+
+      // 30-day activity calendar
+      (()=>{
+        const todayDt=new Date(today+"T12:00:00");
+        const days30=Array.from({length:30},(_,i)=>{ const d=new Date(todayDt); d.setDate(d.getDate()-(29-i)); return d.toISOString().split("T")[0]; });
+        const calColor=key=>{
+          const dayActs=actByDate[key]||[];
+          if(!dayActs.length) return D.hint;
+          const burned=dayActs.reduce((s,a)=>s+(a.calories_burned||0),0);
+          if(burned>=500) return "#6b4fa0";
+          if(burned>=300) return "#7a5aaf";
+          if(burned>=ACT_MIN) return "#5a4080";
+          return "#2d2038";
+        };
+        const calIcon=key=>{
+          const dayActs=actByDate[key]||[];
+          if(!dayActs.length) return null;
+          const top=dayActs.sort((a,b)=>(b.calories_burned||0)-(a.calories_burned||0))[0];
+          return actIcon(top.activity);
+        };
+        const DOW=["M","T","W","T","F","S","S"];
+        const offset=(new Date(days30[0]+"T12:00:00").getDay()+6)%7;
+        const cells=[...Array(offset).fill(null),...days30];
+        return h("div",{style:card},
+          h("div",{style:sHead},"30-day activity calendar"),
+          h("div",{style:{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:4,marginBottom:8}},
+            ...DOW.map((d,i)=>h("div",{key:i,style:{textAlign:"center",fontSize:10,color:D.muted}},d))),
+          h("div",{style:{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:4}},
+            ...cells.map((key,i)=>{
+              if(key===null) return h("div",{key:"e"+i,style:{aspectRatio:"1",borderRadius:4}});
+              const icon=calIcon(key);
+              return h("div",{key,title:key,style:{
+                aspectRatio:"1",borderRadius:4,background:calColor(key),
+                display:"flex",alignItems:"center",justifyContent:"center",
+                outline:key===today?`1.5px solid ${D.accent}`:"none",
+                fontSize:"clamp(8px,2vw,14px)",
+              }},icon||null);
+            })
+          ),
+          h("div",{style:{display:"flex",gap:12,marginTop:10,flexWrap:"wrap"}},
+            ...[["#6b4fa0","≥500 kcal"],["#7a5aaf","≥300 kcal"],["#5a4080","≥150 kcal"],[D.hint,"No activity"]]
+              .map(([color,label])=>h("div",{key:label,style:{display:"flex",alignItems:"center",gap:4}},
+                h("div",{style:{width:10,height:10,borderRadius:2,background:color}}),
+                h("span",{style:{fontSize:10,color:D.muted}},label)))
+          )
+        );
+      })()
+    ),
+
+    // ═══════════════════════════════════════════════════════
+    // SUMMARY TAB
+    // ═══════════════════════════════════════════════════════
+    !loading&&mainTab==="summary"&&h("div",{className:"fade"},
+      // Both streaks
+      h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}},
+        h("div",{style:{...card,marginBottom:0,borderColor:nutStreak>0?"#3a5a20":D.border}},
+          h("div",{style:{fontSize:11,color:D.muted,marginBottom:6}},"🥗 Nutrition streak"),
+          h("div",{style:{fontSize:28,fontWeight:600,color:nutStreak>0?COLORS.protein:D.muted}},
+            nutStreak,h("span",{style:{fontSize:12,fontWeight:400,color:D.muted,marginLeft:3}},"days")),
+          h("div",{style:{fontSize:11,color:D.muted,marginTop:3}},
+            `❄️ ${freezeBal}/2 freezes · good day = ≥2 meals + ≥87g pro`)
+        ),
+        h("div",{style:{...card,marginBottom:0,borderColor:actStreak>0?"#3a2a5a":D.border}},
+          h("div",{style:{fontSize:11,color:D.muted,marginBottom:6}},"🏃 Activity streak"),
+          h("div",{style:{fontSize:28,fontWeight:600,color:actStreak>0?COLORS.act:D.muted}},
+            actStreak,h("span",{style:{fontSize:12,fontWeight:400,color:D.muted,marginLeft:3}},"days")),
+          h("div",{style:{fontSize:11,color:D.muted,marginTop:3}},
+            `❄️ ${actFreezeBal}/2 freezes · valid = ≥150 kcal burned`)
+        )
+      ),
+
+      // Compact macro rings
+      h("div",{style:{...card,padding:"1.25rem 1rem"}},
+        h("div",{style:{...sHead,marginBottom:12}},"Today — nutrition"),
+        h("div",{style:{display:"flex",justifyContent:"space-around",gap:8}},
+          ...[
+            {key:"cal",    label:"Cal",   unit:"kcal",color:COLORS.cal,    track:COLORS.calBg},
+            {key:"protein",label:"Pro",   unit:"g",   color:COLORS.protein,track:COLORS.proteinBg},
+            {key:"carbs",  label:"Carbs", unit:"g",   color:COLORS.carbs,  track:COLORS.carbsBg},
+            {key:"fat",    label:"Fat",   unit:"g",   color:COLORS.fat,    track:COLORS.fatBg},
+            {key:"fiber",  label:"Fiber", unit:"g",   color:COLORS.fiber,  track:COLORS.fiberBg},
+          ].map(({key,label,unit,color,track})=>
+            h("div",{key,style:{display:"flex",flexDirection:"column",alignItems:"center",gap:4,flex:"1 1 0"}},
+              h(Ring,{value:totals[key],target:TARGETS[key],color,track,size:60,sw:6}),
+              h("div",{style:{fontSize:10,color:D.muted}},label)
+            )
+          )
+        ),
+        h("div",{style:{fontSize:12,color:D.muted,textAlign:"center",marginTop:10}},
+          `${Math.round(totals.cal)} / ${TARGETS.cal} kcal consumed · `+
+          `${Math.round(totals.protein)}g protein`)
+      ),
+
+      // Activity summary
+      h("div",{style:card},
+        h("div",{style:{...sHead,marginBottom:12}},"Today — activity"),
+        acts.length===0
+          ?h("div",{style:{fontSize:13,color:D.muted,padding:"8px 0"}},"No activities logged today.")
+          :h("div",null,
+              acts.map((a,i)=>h("div",{key:a.id||i,style:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"6px 0",borderBottom:i<acts.length-1?`0.5px solid ${D.border}`:"none"}},
+                h("div",{style:{display:"flex",alignItems:"center",gap:8}},
+                  h("span",{style:{fontSize:16}},actIcon(a.activity)),
+                  h("span",{style:{fontSize:13,color:D.text}},
+                    a.activity.charAt(0).toUpperCase()+a.activity.slice(1),
+                    h("span",{style:{fontSize:11,color:D.muted,marginLeft:6}},`${a.duration_minutes}min · ${a.intensity}`)
+                  )
+                ),
+                h("span",{style:{fontSize:13,fontWeight:500,color:(a.calories_burned||0)>=ACT_MIN?COLORS.act:D.muted}},
+                  `${a.calories_burned} kcal`)
+              ))
+          )
+      ),
+
+      // Net calories card
+      (()=>{
+        const net = Math.round(totals.cal - actTotals.burned);
+        const netColor = net > TARGETS.cal ? "#ff9f43" : net < TARGETS.cal * 0.5 ? COLORS.protein : COLORS.cal;
+        return h("div",{style:{...card,display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}},
+          h("div",{style:{textAlign:"center"}},
+            h("div",{style:{fontSize:11,color:D.muted,marginBottom:4}},"Consumed"),
+            h("div",{style:{fontSize:18,fontWeight:600,color:COLORS.cal}},Math.round(totals.cal)),
+            h("div",{style:{fontSize:10,color:D.muted}},"kcal")
+          ),
+          h("div",{style:{textAlign:"center",borderLeft:`0.5px solid ${D.border}`,borderRight:`0.5px solid ${D.border}`}},
+            h("div",{style:{fontSize:11,color:D.muted,marginBottom:4}},"Burned"),
+            h("div",{style:{fontSize:18,fontWeight:600,color:COLORS.act}},actTotals.burned),
+            h("div",{style:{fontSize:10,color:D.muted}},"kcal")
+          ),
+          h("div",{style:{textAlign:"center"}},
+            h("div",{style:{fontSize:11,color:D.muted,marginBottom:4}},"Net"),
+            h("div",{style:{fontSize:18,fontWeight:600,color:netColor}},net),
+            h("div",{style:{fontSize:10,color:D.muted}},"kcal")
+          )
+        );
+      })(),
+
+      // Meal list (compact)
+      viewMeals.length>0&&h("div",{style:card},
+        h("div",{style:sHead},`${viewMeals.length} meal${viewMeals.length!==1?"s":""} logged`),
+        viewMeals.map((m,i)=>
+          h("div",{key:m.id||i,style:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"7px 0",borderBottom:i<viewMeals.length-1?`0.5px solid ${D.border}`:"none"}},
+            h("div",null,
+              h("div",{style:{fontSize:13,color:D.text}},m.name),
+              h("div",{style:{fontSize:11,color:D.muted,marginTop:2}},
+                `${Math.round(m.cal)} kcal · ${Math.round(m.protein)}g pro · ${Math.round(m.fiber||0)}g fiber`)
+            ),
+            h("span",{style:{fontSize:11,color:D.muted,flexShrink:0,marginLeft:8}},displayTime(m.meal_time))
+          )
+        )
       )
     ),
 
     h("div",{style:{textAlign:"center",fontSize:11,color:"#2a2a26",marginTop:"1.5rem",paddingBottom:"2rem"}},
-      `Say "log that" in Claude after any meal · syncs across all devices`)
+      `Say "log that" in Claude after any meal · /workout in bot to log activity`)
   );
 }
 
