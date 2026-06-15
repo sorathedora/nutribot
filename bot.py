@@ -46,6 +46,15 @@ ACTIVITIES_API  = f"{SUPABASE_URL}/rest/v1/activities"
 #   ('act_freeze_balance', '0'),
 #   ('act_streak_milestone_credited', '0')
 # ON CONFLICT (key) DO NOTHING;
+#
+# -- NEW: daily step count (synced via iOS Shortcut)
+# CREATE TABLE daily_steps (
+#   step_date date PRIMARY KEY,
+#   steps integer NOT NULL,
+#   synced_at timestamptz DEFAULT now()
+# );
+# ALTER TABLE daily_steps ENABLE ROW LEVEL SECURITY;
+# CREATE POLICY "anon_all" ON daily_steps FOR ALL TO anon USING (true) WITH CHECK (true);
 # ─────────────────────────────────────────────────────────────
 
 HEADERS  = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"}
@@ -66,28 +75,30 @@ ACT_FREEZE_MAX   = 2
 # MET values (metabolic equivalent) by activity and intensity
 # Calories = MET × weight_kg × hours
 METS = {
-    "walk":      {"light": 2.5, "moderate": 3.5, "vigorous": 4.5},
-    "jog":       {"light": 6.0, "moderate": 8.0, "vigorous": 10.0},
-    "run":       {"light": 7.0, "moderate": 9.0, "vigorous": 12.0},
-    "badminton": {"light": 4.5, "moderate": 5.5, "vigorous": 7.0},
-    "basketball":{"light": 4.5, "moderate": 6.0, "vigorous": 8.0},
-    "swimming":  {"light": 5.0, "moderate": 6.0, "vigorous": 8.0},
-    "cycling":   {"light": 4.0, "moderate": 6.0, "vigorous": 10.0},
-    "yoga":      {"light": 2.0, "moderate": 3.0, "vigorous": 4.0},
-    "gym":       {"light": 3.0, "moderate": 5.0, "vigorous": 6.0},
-    "football":  {"light": 5.0, "moderate": 7.0, "vigorous": 10.0},
-    "cricket":   {"light": 3.0, "moderate": 4.5, "vigorous": 6.0},
-    "dancing":   {"light": 3.0, "moderate": 5.0, "vigorous": 7.5},
-    "hiking":    {"light": 4.0, "moderate": 5.5, "vigorous": 7.5},
-    "sex":       {"light": 1.5, "moderate": 3.0, "vigorous": 5.8},
-    "tennis":    {"light": 5.0, "moderate": 7.0, "vigorous": 8.0},
-    "squash":    {"light": 6.0, "moderate": 9.0, "vigorous": 12.0},
-    "volleyball":{"light": 3.0, "moderate": 4.0, "vigorous": 6.0},
-    "boxing":    {"light": 5.0, "moderate": 7.5, "vigorous": 12.0},
-    "skipping":  {"light": 8.0, "moderate": 10.0,"vigorous": 12.0},
-    "stair":     {"light": 4.0, "moderate": 6.0, "vigorous": 8.0},
-    "pilates":   {"light": 2.5, "moderate": 3.5, "vigorous": 4.5},
-    "crossfit":  {"light": 5.0, "moderate": 8.0, "vigorous": 12.0},
+    # Values from the 2011 Compendium of Physical Activities (Ainsworth et al.)
+    # Calories = MET × 74kg × (duration_min / 60)
+    "walk":      {"light": 2.8, "moderate": 3.5, "vigorous": 5.0},   # 2mph / 3mph / 4mph
+    "jog":       {"light": 6.0, "moderate": 7.0, "vigorous": 9.0},
+    "run":       {"light": 8.3, "moderate": 9.8, "vigorous": 12.8},  # 5mph / 6mph / 7.5mph
+    "badminton": {"light": 4.5, "moderate": 5.5, "vigorous": 7.0},   # recreational / social / competitive
+    "basketball":{"light": 4.5, "moderate": 6.5, "vigorous": 8.0},   # shooting baskets / recreational / game
+    "swimming":  {"light": 5.0, "moderate": 5.8, "vigorous": 9.8},   # leisurely / moderate / butterfly vigorous
+    "cycling":   {"light": 4.0, "moderate": 6.8, "vigorous": 10.0},  # <10mph / 12-14mph / 16-19mph
+    "yoga":      {"light": 2.0, "moderate": 2.5, "vigorous": 4.0},   # restorative / hatha / power/vinyasa
+    "gym":       {"light": 3.5, "moderate": 5.0, "vigorous": 6.0},   # weight training: light / moderate / vigorous
+    "football":  {"light": 5.0, "moderate": 7.0, "vigorous": 10.0},  # casual / recreational / competitive
+    "cricket":   {"light": 3.5, "moderate": 4.8, "vigorous": 6.0},   # fielding / batting / bowling hard
+    "dancing":   {"light": 3.0, "moderate": 5.0, "vigorous": 7.8},   # slow / general / aerobic/vigorous
+    "hiking":    {"light": 4.0, "moderate": 5.3, "vigorous": 7.0},   # flat / cross-country / steep incline
+    "sex":       {"light": 1.8, "moderate": 3.0, "vigorous": 5.8},   # passive / active / very vigorous
+    "tennis":    {"light": 5.0, "moderate": 7.3, "vigorous": 8.0},   # doubles / singles / competitive
+    "squash":    {"light": 7.3, "moderate": 9.0, "vigorous": 12.1},  # recreational / vigorous / competitive
+    "volleyball":{"light": 3.0, "moderate": 4.0, "vigorous": 8.0},   # noncompetitive / recreational / beach competitive
+    "boxing":    {"light": 6.0, "moderate": 9.0, "vigorous": 12.8},  # punching bag / moderate sparring / ring
+    "skipping":  {"light": 8.8, "moderate": 10.0,"vigorous": 12.3},  # slow / moderate / fast rope
+    "stair":     {"light": 4.0, "moderate": 6.0, "vigorous": 8.8},   # slow / moderate / fast climbing
+    "pilates":   {"light": 2.5, "moderate": 3.0, "vigorous": 4.0},
+    "crossfit":  {"light": 5.0, "moderate": 8.0, "vigorous": 14.0},  # HIIT/CrossFit vigorous = 14 METs
 }
 
 # Keyword → canonical activity name (sorted by length desc at match time)
@@ -116,7 +127,7 @@ ACTIVITY_ICONS = {
     "dancing": "💃", "hiking": "🥾",
     "sex": "🔥", "tennis": "🎾",
     "squash": "🎾", "volleyball": "🏐",
-    "boxing": "🥊", "skipping": "⏭️",
+    "boxing": "🥊", "skipping": "🏃",
     "stair": "🪜", "pilates": "🤸", "crossfit": "💪",
 }
 
