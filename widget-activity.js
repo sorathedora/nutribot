@@ -33,7 +33,7 @@ const ACTIVITY_ICONS = {
   swimming: "🏊", cycling: "🚴", yoga: "🧘", gym: "🏋️",
   football: "⚽", cricket: "🏏", dancing: "💃", hiking: "🥾",
   sex: "🔥", tennis: "🎾", squash: "🎾", volleyball: "🏐",
-  boxing: "🥊", skipping: "⏭️", stair: "🪜", pilates: "🤸", crossfit: "💪",
+  boxing: "🥊", skipping: "🏃", stair: "🪜", pilates: "🤸", crossfit: "💪",
 };
 function actIcon(name){ return ACTIVITY_ICONS[name] || "🏃"; }
 
@@ -107,9 +107,13 @@ function makeRingImage(ratio, hexColor, sizePx = 56, strokeW = 6) {
 
 // ── Fetch data ─────────────────────────────────────────────────
 const today = todayStr();
-let todayActs = [], actStreak = 0, actFreezeBal = 0, nutStreak = 0;
+let todayActs = [], actStreak = 0, actFreezeBal = 0, nutStreak = 0, todaySteps = null;
 
 try { todayActs = await supaGet(`/activities?activity_date=eq.${today}&order=logged_at.asc`); } catch (_) {}
+try {
+  const stepsRows = await supaGet(`/daily_steps?step_date=eq.${today}`);
+  if (stepsRows.length) todaySteps = stepsRows[0].steps;
+} catch (_) {}
 
 try {
   const rows = await supaGet("/settings?key=eq.act_freeze_balance");
@@ -233,6 +237,21 @@ if (actFreezeBal > 0) {
   const freeTxt = metaRow.addText("❄️ " + actFreezeBal);
   freeTxt.font = Font.systemFont(11);
   freeTxt.textColor = new Color("#9a80d0");
+}
+
+// Step count row
+if (todaySteps !== null) {
+  const stepsRow = statsCol.addStack();
+  stepsRow.layoutHorizontally();
+  stepsRow.spacing = 4;
+  const STEP_TARGET = 5000;
+  const stepHit = todaySteps >= STEP_TARGET;
+  const stepsTxt = stepsRow.addText("👟 " + todaySteps.toLocaleString());
+  stepsTxt.font = Font.systemFont(11);
+  stepsTxt.textColor = new Color(stepHit ? HEX.accent : HEX.muted);
+  const stepsLbl = stepsRow.addText(` / ${STEP_TARGET.toLocaleString()}` + (stepHit ? " ✓" : ""));
+  stepsLbl.font = Font.systemFont(11);
+  stepsLbl.textColor = new Color(HEX.muted);
 }
 
 widget.addSpacer(8);
