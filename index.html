@@ -377,6 +377,21 @@ async function apiFetchCheatDays(){
     return new Set((await r.json()).map(x=>x.date));
   } catch{ return new Set(); }
 }
+async function apiFetchActCheatDays(){
+  try{
+    const r = await fetch(`${URL_BASE}/act_cheat_days?order=date.desc`,{headers:HDRS});
+    if(!r.ok) return new Set();
+    return new Set((await r.json()).map(x=>x.date));
+  } catch{ return new Set(); }
+}
+async function apiAddActCheatDay(date){
+  const r = await fetch(`${URL_BASE}/act_cheat_days`,{method:"POST",headers:{...HDRS,"Prefer":"return=minimal"},body:JSON.stringify({date})});
+  if(!r.ok) throw new Error(r.status+" "+await r.text());
+}
+async function apiRemoveActCheatDay(date){
+  const r = await fetch(`${URL_BASE}/act_cheat_days?date=eq.${date}`,{method:"DELETE",headers:{...HDRS,"Prefer":"return=minimal"}});
+  if(!r.ok) throw new Error(r.status+" "+await r.text());
+}
 async function apiFetchSettings(){
   try{
     const r = await fetch(`${URL_BASE}/settings`,{headers:HDRS});
@@ -464,12 +479,12 @@ async function apiRemoveCheatDay(date){
   const r = await fetch(`${URL_BASE}/cheat_days?date=eq.${date}`,{method:"DELETE",headers:{...HDRS,"Prefer":"return=minimal"}});
   if(!r.ok) throw new Error(r.status+" "+await r.text());
 }
-async function apiCopyYesterday(){
-  const y = new Date(todayStr()+"T12:00:00"); y.setDate(y.getDate()-1);
-  const yStr = y.toISOString().split("T")[0];
-  const meals = await apiFetch(yStr, yStr);
+async function apiCopyPreviousDay(targetDate){
+  const p = new Date(targetDate+"T12:00:00"); p.setDate(p.getDate()-1);
+  const prevStr = p.toISOString().split("T")[0];
+  const meals = await apiFetch(prevStr, prevStr);
   for(const m of meals){
-    await apiInsert({meal_date:todayStr(), meal_time:m.meal_time, name:m.name, cal:m.cal, protein:m.protein, carbs:m.carbs, fat:m.fat, fiber:m.fiber||0});
+    await apiInsert({meal_date:targetDate, meal_time:m.meal_time, name:m.name, cal:m.cal, protein:m.protein, carbs:m.carbs, fat:m.fat, fiber:m.fiber||0});
   }
   return meals.length;
 }
@@ -698,8 +713,9 @@ function calcNutStreak(byDate, cheatDays){
   return streak;
 }
 
-function calcActStreak(actByDate){
-  const isValid = k => (actByDate[k]||[]).some(a=>a.calories_burned>=ACT_MIN);
+function calcActStreak(actByDate, actCheatDays){
+  const cheats = actCheatDays || new Set();
+  const isValid = k => cheats.has(k) || (actByDate[k]||[]).some(a=>a.calories_burned>=ACT_MIN);
   const today = todayStr();
   const todayDt = new Date(today+"T12:00:00");
   let streak=0;
@@ -781,23 +797,63 @@ function computePullupStageAdvance(bodyByDate, stageIndex, stageEnteredAt, today
 function fieldStyle(extra){
   return {background:D.surface,border:`0.5px solid ${D.border}`,color:D.text,borderRadius:8,padding:"7px 10px",fontSize:12,fontFamily:"inherit",...extra};
 }
+// Parses "Name words... cal protein carbs fat fiber" — trailing numeric
+// tokens (up to 5) become macros in that fixed order, the rest is the name.
+// Mirrors the shorthand pattern used when typing meals straight to the bot.
+function parseQuickMealLine(line){
+  const tokens = line.trim().split(/\s+/);
+  const nums = [];
+  let i = tokens.length-1;
+  while(i>=0 && nums.length<5 && /^-?\d+\.?\d*$/.test(tokens[i])){
+    nums.unshift(parseFloat(tokens[i])); i--;
+  }
+  if(!nums.length) return null;
+  const name = tokens.slice(0,i+1).join(" ").trim();
+  if(!name) return null;
+  const [cal=0,protein=0,carbs=0,fat=0,fiber=0] = nums;
+  return {name, cal, protein, carbs, fat, fiber};
+}
 function LogMealForm({onSubmit, busy}){
+  const [mode, setMode] = useState("quick");
+  const [line, setLine] = useState("");
+  const [lineErr, setLineErr] = useState(null);
   const [f, setF] = useState({name:"",cal:"",protein:"",carbs:"",fat:"",fiber:""});
   const set = (k,v) => setF(prev=>({...prev,[k]:v}));
   const valid = f.name.trim() && f.cal!=="";
+  const modeBtn = (m,label) => h("button",{onClick:()=>setMode(m),style:{
+    flex:1,fontSize:11,padding:"5px",borderRadius:7,fontWeight:mode===m?600:400,
+    background:mode===m?D.accent:"transparent",color:mode===m?D.accentText:D.muted,
+    border:`0.5px solid ${mode===m?D.accent:D.border}`
+  }},label);
   return h("div",null,
-    h("input",{type:"text",placeholder:"Meal name",value:f.name,onChange:e=>set("name",e.target.value),
-      style:fieldStyle({width:"100%",marginBottom:7})}),
-    h("div",{style:{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:6,marginBottom:9}},
-      ...[["cal","Cal"],["protein","Pro g"],["carbs","Carb g"],["fat","Fat g"],["fiber","Fiber g"]].map(([k,ph])=>
-        h("input",{key:k,type:"number",placeholder:ph,value:f[k],onChange:e=>set(k,e.target.value),style:fieldStyle({width:"100%"})})
-      )
-    ),
-    h("button",{disabled:!valid||busy,onClick:()=>{
-        onSubmit({name:f.name.trim(), cal:+f.cal||0, protein:+f.protein||0, carbs:+f.carbs||0, fat:+f.fat||0, fiber:+f.fiber||0});
-        setF({name:"",cal:"",protein:"",carbs:"",fat:"",fiber:""});
-      }, style:{width:"100%",background:valid?D.accent:D.hint,color:valid?D.accentText:D.muted,border:"none",borderRadius:8,padding:"8px",fontSize:12,fontWeight:600,opacity:busy?0.6:1}},
-      busy?"Logging...":"Log meal")
+    h("div",{style:{display:"flex",gap:6,marginBottom:10}}, modeBtn("quick","Quick"), modeBtn("detailed","Detailed")),
+    mode==="quick" ? h("div",null,
+      h("input",{type:"text",placeholder:"e.g. Chicken bhurji 2 dosa 400 27 41 15 2",value:line,
+        onChange:e=>{setLine(e.target.value); setLineErr(null);},
+        style:fieldStyle({width:"100%",marginBottom:6})}),
+      h("div",{style:{fontSize:10,color:D.muted,marginBottom:9,lineHeight:1.5}},
+        "Name, then numbers in order: cal · protein · carbs · fat · fiber (trailing ones optional)"),
+      lineErr&&h("div",{style:{fontSize:11,color:"#d08080",marginBottom:9}},lineErr),
+      h("button",{disabled:!line.trim()||busy,onClick:()=>{
+          const parsed = parseQuickMealLine(line);
+          if(!parsed){ setLineErr("Couldn't find a name + at least a calorie number."); return; }
+          onSubmit(parsed); setLine(""); setLineErr(null);
+        }, style:{width:"100%",background:line.trim()?D.accent:D.hint,color:line.trim()?D.accentText:D.muted,border:"none",borderRadius:8,padding:"8px",fontSize:12,fontWeight:600,opacity:busy?0.6:1}},
+        busy?"Logging...":"Log meal")
+    ) : h("div",null,
+      h("input",{type:"text",placeholder:"Meal name",value:f.name,onChange:e=>set("name",e.target.value),
+        style:fieldStyle({width:"100%",marginBottom:7})}),
+      h("div",{style:{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:6,marginBottom:9}},
+        ...[["cal","Cal"],["protein","Pro g"],["carbs","Carb g"],["fat","Fat g"],["fiber","Fiber g"]].map(([k,ph])=>
+          h("input",{key:k,type:"number",placeholder:ph,value:f[k],onChange:e=>set(k,e.target.value),style:fieldStyle({width:"100%"})})
+        )
+      ),
+      h("button",{disabled:!valid||busy,onClick:()=>{
+          onSubmit({name:f.name.trim(), cal:+f.cal||0, protein:+f.protein||0, carbs:+f.carbs||0, fat:+f.fat||0, fiber:+f.fiber||0});
+          setF({name:"",cal:"",protein:"",carbs:"",fat:"",fiber:""});
+        }, style:{width:"100%",background:valid?D.accent:D.hint,color:valid?D.accentText:D.muted,border:"none",borderRadius:8,padding:"8px",fontSize:12,fontWeight:600,opacity:busy?0.6:1}},
+        busy?"Logging...":"Log meal")
+    )
   );
 }
 function LogWorkoutForm({onSubmit, busy}){
@@ -817,7 +873,7 @@ function LogWorkoutForm({onSubmit, busy}){
     h("div",{style:{fontSize:11,color:D.muted,marginBottom:9}},
       `≈ ${cal} kcal burned`,h("span",{style:{color:cal>=ACT_MIN?D.accent:D.muted,marginLeft:6}},cal>=ACT_MIN?"✓ valid":`${ACT_MIN-cal} kcal short`)),
     h("button",{disabled:!valid||busy,onClick:()=>onSubmit({
-        activity_date:todayStr(), activity, duration_minutes:+duration, intensity,
+        activity, duration_minutes:+duration, intensity,
         calories_burned:cal, met_value:METS[activity][intensity]
       }), style:{width:"100%",background:valid?D.accent:D.hint,color:valid?D.accentText:D.muted,border:"none",borderRadius:8,padding:"8px",fontSize:12,fontWeight:600,opacity:busy?0.6:1}},
       busy?"Logging...":"Log workout")
@@ -888,6 +944,7 @@ function App(){
   const [actHist,  setActHist]  = useState([]);    // 90-day activity history
   const [stepsData,setSteps]    = useState({});    // { date: stepCount }
   const [cheatDays,setCD]       = useState(()=>new Set());
+  const [actCheatDays,setActCD] = useState(()=>new Set());
   const [settings, setSettings] = useState({});
   const [loading,  setLoading]  = useState(true);
   const [error,    setError]    = useState(null);
@@ -904,6 +961,8 @@ function App(){
   const [editMealId,   setEditMealId]= useState(null);
   const [logBusy,      setLogBusy]   = useState(false);
   const [logMsg,       setLogMsg]    = useState(null);
+  const [logCalOpen,   setLogCalOpen]= useState(false);
+  const [logCalMonth,  setLogCal]    = useState(()=>todayStr().slice(0,7));
   function flashMsg(msg){ setLogMsg(msg); setTimeout(()=>setLogMsg(null), 3500); }
   const toggleBodyDay = d => setBodyExp(prev=>{ const s=new Set(prev); s.has(d)?s.delete(d):s.add(d); return s; });
 
@@ -931,12 +990,13 @@ function App(){
       const d90 = new Date(today+"T12:00:00"); d90.setDate(d90.getDate()-89);
       const histFrom = d90.toISOString().split("T")[0];
       try{
-        const [viewM, histM, viewA, histA, cd, sett, stps, bodyH, presetList] = await Promise.all([
+        const [viewM, histM, viewA, histA, cd, actCd, sett, stps, bodyH, presetList] = await Promise.all([
           apiFetch(viewDate, viewDate),
           apiFetch(histFrom, today),
           apiFetchActivities(viewDate, viewDate),
           apiFetchActivities(histFrom, today),
           apiFetchCheatDays(),
+          apiFetchActCheatDays(),
           apiFetchSettings(),
           apiFetchSteps(histFrom, today),
           apiFetchBodySets(histFrom, today),
@@ -944,7 +1004,7 @@ function App(){
         ]);
         setVM(viewM); setHist(histM);
         setActs(viewA); setActHist(histA);
-        setCD(cd); setSettings(sett); setSteps(stps);
+        setCD(cd); setActCD(actCd); setSettings(sett); setSteps(stps);
         setBodyHist(bodyH); setPresets(presetList);
 
         // ── Body Goals: auto-advance block/pull-up stage + credit freezes ──
@@ -1000,7 +1060,7 @@ function App(){
   },[actHist]);
 
   const nutStreak = useMemo(()=>calcNutStreak(byDate,cheatDays),[byDate,cheatDays]);
-  const actStreak = useMemo(()=>calcActStreak(actByDate),[actByDate]);
+  const actStreak = useMemo(()=>calcActStreak(actByDate, actCheatDays),[actByDate, actCheatDays]);
   const freezeBal = parseInt(settings.freeze_balance||"0");
   const actFreezeBal = parseInt(settings.act_freeze_balance||"0");
 
@@ -1034,12 +1094,12 @@ function App(){
   // ── Log tab — action handlers (mirrors bot.py write commands) ──
   async function submitMeal(meal){
     setLogBusy(true);
-    try{ await apiInsert({...meal, meal_date:todayStr(), meal_time:fmtTime()}); flashMsg(`✓ Logged: ${meal.name}`); refresh(); }
+    try{ await apiInsert({...meal, meal_date:viewDate, meal_time:fmtTime()}); flashMsg(`✓ Logged: ${meal.name}`); refresh(); }
     catch(e){ setError(e.message); } finally{ setLogBusy(false); }
   }
   async function submitWorkout(act){
     setLogBusy(true);
-    try{ await apiInsertActivity(act); flashMsg(`✓ Logged: ${act.activity}`); refresh(); }
+    try{ await apiInsertActivity({...act, activity_date:viewDate}); flashMsg(`✓ Logged: ${act.activity}`); refresh(); }
     catch(e){ setError(e.message); } finally{ setLogBusy(false); }
   }
   async function saveMealEdit(id, updates){
@@ -1066,7 +1126,7 @@ function App(){
   }
   async function logFromPreset(p){
     setLogBusy(true);
-    try{ await apiInsert({name:p.name, cal:p.cal, protein:p.protein, carbs:p.carbs, fat:p.fat, fiber:p.fiber||0, meal_date:todayStr(), meal_time:fmtTime()});
+    try{ await apiInsert({name:p.name, cal:p.cal, protein:p.protein, carbs:p.carbs, fat:p.fat, fiber:p.fiber||0, meal_date:viewDate, meal_time:fmtTime()});
       flashMsg(`✓ Logged: ${p.name}`); refresh(); }
     catch(e){ setError(e.message); } finally{ setLogBusy(false); }
   }
@@ -1075,17 +1135,26 @@ function App(){
     catch(e){ setError(e.message); }
   }
   async function toggleCheatDay(){
-    const isCheat = cheatDays.has(today);
+    const isCheat = cheatDays.has(viewDate);
     if(!isCheat && freezeBal<=0){ flashMsg("❌ No nutrition freezes available."); return; }
     try{
-      if(isCheat){ await apiRemoveCheatDay(today); flashMsg("Cheat day removed"); }
-      else{ await apiAddCheatDay(today); flashMsg("❄️ Cheat day activated"); }
+      if(isCheat){ await apiRemoveCheatDay(viewDate); flashMsg("Cheat day removed"); }
+      else{ await apiAddCheatDay(viewDate); flashMsg("❄️ Cheat day activated"); }
       refresh();
     } catch(e){ setError(e.message); }
   }
-  async function copyYesterdayHandler(){
+  async function toggleActCheatDay(){
+    const isCheat = actCheatDays.has(viewDate);
+    if(!isCheat && actFreezeBal<=0){ flashMsg("❌ No activity freezes available."); return; }
+    try{
+      if(isCheat){ await apiRemoveActCheatDay(viewDate); flashMsg("Activity rest day removed"); }
+      else{ await apiAddActCheatDay(viewDate); flashMsg("❄️ Activity rest day activated"); }
+      refresh();
+    } catch(e){ setError(e.message); }
+  }
+  async function copyPreviousDayHandler(){
     setLogBusy(true);
-    try{ const n = await apiCopyYesterday(); flashMsg(n>0?`📋 Copied ${n} meal${n!==1?"s":""} from yesterday`:"Nothing to copy from yesterday."); refresh(); }
+    try{ const n = await apiCopyPreviousDay(viewDate); flashMsg(n>0?`📋 Copied ${n} meal${n!==1?"s":""} from the previous day`:"Nothing to copy from the previous day."); refresh(); }
     catch(e){ setError(e.message); } finally{ setLogBusy(false); }
   }
 
@@ -1846,31 +1915,58 @@ function App(){
 
       logMsg&&h("div",{style:{...card,background:"#0f1f0a",border:`0.5px solid #2a4a1a`,color:D.accent,fontSize:12,textAlign:"center",padding:"8px 12px"}},logMsg),
 
-      // Log a meal
+      // Date seeker — every action below operates on this date
+      h("div",{style:{display:"flex",alignItems:"center",gap:8,marginBottom:12}},
+        h("button",{onClick:()=>goDate(-1),style:{background:"transparent",border:`0.5px solid ${D.border}`,color:D.muted,borderRadius:8,padding:"4px 13px",fontSize:16,lineHeight:1}},"‹"),
+        h("input",{type:"date",value:viewDate,max:today,onChange:e=>e.target.value&&setVD(e.target.value),
+          style:{background:D.card,border:`0.5px solid ${D.border}`,color:D.text,borderRadius:8,padding:"5px 10px",fontSize:12,fontFamily:"inherit",flex:1,colorScheme:"dark"}}),
+        viewDate<today&&h("button",{onClick:()=>setVD(today),style:{fontSize:11,padding:"5px 12px",borderRadius:8,background:D.accent,color:D.accentText,border:"none",fontWeight:600,whiteSpace:"nowrap"}},"Today"),
+        h("button",{onClick:()=>goDate(1),disabled:viewDate>=today,style:{background:"transparent",border:`0.5px solid ${D.border}`,color:viewDate>=today?D.hint:D.muted,borderRadius:8,padding:"4px 13px",fontSize:16,lineHeight:1}},"›")
+      ),
       h("div",{style:card},
-        h("div",{style:sHead},"Log a meal"),
+        h("div",{onClick:()=>setLogCalOpen(o=>!o),style:{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}},
+          h("div",{style:{...sHead,marginBottom:0}},"📅 Pick a date"),
+          h("span",{style:{fontSize:13,color:D.muted,display:"inline-block",transform:logCalOpen?"rotate(90deg)":"none",transition:"transform 0.2s"}},"›")
+        ),
+        logCalOpen&&h("div",{style:{marginTop:12}},
+          h(MonthCalendar,{
+            month:logCalMonth, onPrev:()=>navMonth(setLogCal,-1), onNext:()=>navMonth(setLogCal,+1),
+            today, minMonth:minCalMonth, onDayClick:key=>{ setVD(key); setLogCalOpen(false); },
+            getCellBg:key=>{
+              const has = (byDate[key]||[]).length>0 || (actByDate[key]||[]).length>0;
+              return has?"#2a3a1a":D.hint;
+            },
+          })
+        )
+      ),
+
+      // Log a meal — for the selected date
+      h("div",{style:card},
+        h("div",{style:sHead},viewDate===today?"Log a meal":`Log a meal — ${fmtDate(viewDate)}`),
         h(LogMealForm,{onSubmit:submitMeal, busy:logBusy})
       ),
 
-      // Log a workout
+      // Log a workout — for the selected date
       h("div",{style:card},
-        h("div",{style:sHead},"Log a workout"),
+        h("div",{style:sHead},viewDate===today?"Log a workout":`Log a workout — ${fmtDate(viewDate)}`),
         h(LogWorkoutForm,{onSubmit:submitWorkout, busy:logBusy})
       ),
 
       // Quick actions
       h("div",{style:{...card,display:"flex",gap:8,flexWrap:"wrap"}},
         h("button",{onClick:undoLastMeal,style:{flex:"1 1 auto",background:"transparent",border:`0.5px solid ${D.border}`,color:D.muted,borderRadius:8,padding:"8px",fontSize:12}},"↩️ Undo last meal"),
-        h("button",{onClick:copyYesterdayHandler,disabled:logBusy,style:{flex:"1 1 auto",background:"transparent",border:`0.5px solid ${D.border}`,color:D.muted,borderRadius:8,padding:"8px",fontSize:12,opacity:logBusy?0.6:1}},"📋 Copy yesterday's meals"),
-        h("button",{onClick:toggleCheatDay,style:{flex:"1 1 auto",background:cheatDays.has(today)?"#6b4fa0":"transparent",border:`0.5px solid ${cheatDays.has(today)?"#6b4fa0":D.border}`,color:cheatDays.has(today)?"#fff":D.muted,borderRadius:8,padding:"8px",fontSize:12}},
-          cheatDays.has(today)?"❄️ Remove cheat day":`❄️ Mark today a cheat day (${freezeBal} left)`)
+        h("button",{onClick:copyPreviousDayHandler,disabled:logBusy,style:{flex:"1 1 auto",background:"transparent",border:`0.5px solid ${D.border}`,color:D.muted,borderRadius:8,padding:"8px",fontSize:12,opacity:logBusy?0.6:1}},"📋 Copy from previous day"),
+        h("button",{onClick:toggleCheatDay,style:{flex:"1 1 auto",background:cheatDays.has(viewDate)?"#6b4fa0":"transparent",border:`0.5px solid ${cheatDays.has(viewDate)?"#6b4fa0":D.border}`,color:cheatDays.has(viewDate)?"#fff":D.muted,borderRadius:8,padding:"8px",fontSize:12}},
+          cheatDays.has(viewDate)?"❄️ Remove nutrition cheat day":`❄️ Nutrition cheat day (${freezeBal} left)`),
+        h("button",{onClick:toggleActCheatDay,style:{flex:"1 1 auto",background:actCheatDays.has(viewDate)?"#6b4fa0":"transparent",border:`0.5px solid ${actCheatDays.has(viewDate)?"#6b4fa0":D.border}`,color:actCheatDays.has(viewDate)?"#fff":D.muted,borderRadius:8,padding:"8px",fontSize:12}},
+          actCheatDays.has(viewDate)?"❄️ Remove activity rest day":`❄️ Activity rest day (${actFreezeBal} left)`)
       ),
 
-      // Today's meals — edit/delete
+      // Meals — edit/delete, for the selected date
       h("div",{style:card},
-        h("div",{style:sHead},"Today's meals"),
+        h("div",{style:sHead},viewDate===today?"Today's meals":`Meals — ${fmtDate(viewDate)}`),
         viewMeals.length===0
-          ?h(Empty,{icon:"🥗",text:"No meals logged yet today."})
+          ?h(Empty,{icon:"🥗",text:"No meals logged on this day."})
           :viewMeals.map(m=>h(LogMealRow,{
               key:m.id, meal:m, editing:editMealId===m.id,
               onEditStart:()=>setEditMealId(m.id), onEditCancel:()=>setEditMealId(null),
@@ -1878,11 +1974,11 @@ function App(){
             }))
       ),
 
-      // Today's activities — delete
+      // Activities — delete, for the selected date
       h("div",{style:card},
-        h("div",{style:sHead},"Today's activities"),
+        h("div",{style:sHead},viewDate===today?"Today's activities":`Activities — ${fmtDate(viewDate)}`),
         acts.length===0
-          ?h(Empty,{icon:"🏃",text:"No activities logged yet today."})
+          ?h(Empty,{icon:"🏃",text:"No activities logged on this day."})
           :acts.map(a=>h("div",{key:a.id,style:{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 0",borderBottom:`0.5px solid ${D.border}`}},
               h("div",{style:{display:"flex",alignItems:"center",gap:8}},
                 h("span",{style:{fontSize:16}},actIcon(a.activity)),
