@@ -454,6 +454,7 @@ async function apiDeleteActivityById(id){
   const r = await fetch(`${URL_BASE}/activities?id=eq.${id}`,{method:"DELETE",headers:{...HDRS,"Prefer":"return=minimal"}});
   if(!r.ok) throw new Error(r.status+" "+await r.text());
 }
+function titleCase(s){ return s.replace(/\b\w/g, c=>c.toUpperCase()); }
 async function apiSavePreset(name, macros){
   const r = await fetch(`${URL_BASE}/presets`,{method:"POST",headers:{...HDRS,"Prefer":"resolution=merge-duplicates,return=representation"},
     body:JSON.stringify({name:name.toLowerCase(), ...macros})});
@@ -961,8 +962,6 @@ function App(){
   const [editMealId,   setEditMealId]= useState(null);
   const [logBusy,      setLogBusy]   = useState(false);
   const [logMsg,       setLogMsg]    = useState(null);
-  const [logCalOpen,   setLogCalOpen]= useState(false);
-  const [logCalMonth,  setLogCal]    = useState(()=>todayStr().slice(0,7));
   function flashMsg(msg){ setLogMsg(msg); setTimeout(()=>setLogMsg(null), 3500); }
   const toggleBodyDay = d => setBodyExp(prev=>{ const s=new Set(prev); s.has(d)?s.delete(d):s.add(d); return s; });
 
@@ -1126,8 +1125,9 @@ function App(){
   }
   async function logFromPreset(p){
     setLogBusy(true);
-    try{ await apiInsert({name:p.name, cal:p.cal, protein:p.protein, carbs:p.carbs, fat:p.fat, fiber:p.fiber||0, meal_date:viewDate, meal_time:fmtTime()});
-      flashMsg(`✓ Logged: ${p.name}`); refresh(); }
+    const niceName = titleCase(p.name);
+    try{ await apiInsert({name:niceName, cal:p.cal, protein:p.protein, carbs:p.carbs, fat:p.fat, fiber:p.fiber||0, meal_date:viewDate, meal_time:fmtTime()});
+      flashMsg(`✓ Logged: ${niceName}`); refresh(); }
     catch(e){ setError(e.message); } finally{ setLogBusy(false); }
   }
   async function deletePresetHandler(name){
@@ -1923,22 +1923,6 @@ function App(){
         viewDate<today&&h("button",{onClick:()=>setVD(today),style:{fontSize:11,padding:"5px 12px",borderRadius:8,background:D.accent,color:D.accentText,border:"none",fontWeight:600,whiteSpace:"nowrap"}},"Today"),
         h("button",{onClick:()=>goDate(1),disabled:viewDate>=today,style:{background:"transparent",border:`0.5px solid ${D.border}`,color:viewDate>=today?D.hint:D.muted,borderRadius:8,padding:"4px 13px",fontSize:16,lineHeight:1}},"›")
       ),
-      h("div",{style:card},
-        h("div",{onClick:()=>setLogCalOpen(o=>!o),style:{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}},
-          h("div",{style:{...sHead,marginBottom:0}},"📅 Pick a date"),
-          h("span",{style:{fontSize:13,color:D.muted,display:"inline-block",transform:logCalOpen?"rotate(90deg)":"none",transition:"transform 0.2s"}},"›")
-        ),
-        logCalOpen&&h("div",{style:{marginTop:12}},
-          h(MonthCalendar,{
-            month:logCalMonth, onPrev:()=>navMonth(setLogCal,-1), onNext:()=>navMonth(setLogCal,+1),
-            today, minMonth:minCalMonth, onDayClick:key=>{ setVD(key); setLogCalOpen(false); },
-            getCellBg:key=>{
-              const has = (byDate[key]||[]).length>0 || (actByDate[key]||[]).length>0;
-              return has?"#2a3a1a":D.hint;
-            },
-          })
-        )
-      ),
 
       // Log a meal — for the selected date
       h("div",{style:card},
@@ -1952,14 +1936,25 @@ function App(){
         h(LogWorkoutForm,{onSubmit:submitWorkout, busy:logBusy})
       ),
 
-      // Quick actions
-      h("div",{style:{...card,display:"flex",gap:8,flexWrap:"wrap"}},
-        h("button",{onClick:undoLastMeal,style:{flex:"1 1 auto",background:"transparent",border:`0.5px solid ${D.border}`,color:D.muted,borderRadius:8,padding:"8px",fontSize:12}},"↩️ Undo last meal"),
-        h("button",{onClick:copyPreviousDayHandler,disabled:logBusy,style:{flex:"1 1 auto",background:"transparent",border:`0.5px solid ${D.border}`,color:D.muted,borderRadius:8,padding:"8px",fontSize:12,opacity:logBusy?0.6:1}},"📋 Copy from previous day"),
-        h("button",{onClick:toggleCheatDay,style:{flex:"1 1 auto",background:cheatDays.has(viewDate)?"#6b4fa0":"transparent",border:`0.5px solid ${cheatDays.has(viewDate)?"#6b4fa0":D.border}`,color:cheatDays.has(viewDate)?"#fff":D.muted,borderRadius:8,padding:"8px",fontSize:12}},
-          cheatDays.has(viewDate)?"❄️ Remove nutrition cheat day":`❄️ Nutrition cheat day (${freezeBal} left)`),
-        h("button",{onClick:toggleActCheatDay,style:{flex:"1 1 auto",background:actCheatDays.has(viewDate)?"#6b4fa0":"transparent",border:`0.5px solid ${actCheatDays.has(viewDate)?"#6b4fa0":D.border}`,color:actCheatDays.has(viewDate)?"#fff":D.muted,borderRadius:8,padding:"8px",fontSize:12}},
-          actCheatDays.has(viewDate)?"❄️ Remove activity rest day":`❄️ Activity rest day (${actFreezeBal} left)`)
+      // Presets
+      h("div",{style:card},
+        h("div",{style:sHead},"Presets"),
+        presets.length===0
+          ?h("div",{style:{fontSize:12,color:D.muted,marginBottom:10}},"No saved presets yet.")
+          :presets.map(p=>h("div",{key:p.name,style:{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`0.5px solid ${D.border}`}},
+              h("div",null,
+                h("div",{style:{fontSize:13,color:D.text,fontWeight:500}},titleCase(p.name)),
+                h("div",{style:{fontSize:11,color:D.muted,marginTop:2}},
+                  `${Math.round(p.cal)} kcal · ${Math.round(p.protein)}g pro · ${Math.round(p.carbs)}g carb · ${Math.round(p.fat)}g fat · ${Math.round(p.fiber||0)}g fiber`)
+              ),
+              h("div",{style:{display:"flex",gap:5,flexShrink:0}},
+                h("button",{onClick:()=>logFromPreset(p),disabled:logBusy,style:{background:D.accent,color:D.accentText,border:"none",borderRadius:7,padding:"5px 11px",fontSize:11,fontWeight:600}},"Log"),
+                h("button",{onClick:()=>deletePresetHandler(p.name),style:{background:"transparent",border:`0.5px solid #5a2a2a`,color:"#d08080",borderRadius:7,padding:"5px 9px",fontSize:11}},"🗑")
+              )
+            )),
+        h("div",{style:{marginTop:presets.length?12:0,paddingTop:presets.length?12:0,borderTop:presets.length?`0.5px solid ${D.border}`:"none"}},
+          h(SavePresetForm,{onSave:savePresetHandler, busy:logBusy})
+        )
       ),
 
       // Meals — edit/delete, for the selected date
@@ -1991,25 +1986,14 @@ function App(){
             ))
       ),
 
-      // Presets
-      h("div",{style:card},
-        h("div",{style:sHead},"Presets"),
-        presets.length===0
-          ?h("div",{style:{fontSize:12,color:D.muted,marginBottom:10}},"No saved presets yet.")
-          :presets.map(p=>h("div",{key:p.name,style:{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`0.5px solid ${D.border}`}},
-              h("div",null,
-                h("div",{style:{fontSize:13,color:D.text,fontWeight:500}},p.name),
-                h("div",{style:{fontSize:11,color:D.muted,marginTop:2}},
-                  `${Math.round(p.cal)} kcal · ${Math.round(p.protein)}g pro · ${Math.round(p.carbs)}g carb · ${Math.round(p.fat)}g fat · ${Math.round(p.fiber||0)}g fiber`)
-              ),
-              h("div",{style:{display:"flex",gap:5,flexShrink:0}},
-                h("button",{onClick:()=>logFromPreset(p),disabled:logBusy,style:{background:D.accent,color:D.accentText,border:"none",borderRadius:7,padding:"5px 11px",fontSize:11,fontWeight:600}},"Log"),
-                h("button",{onClick:()=>deletePresetHandler(p.name),style:{background:"transparent",border:`0.5px solid #5a2a2a`,color:"#d08080",borderRadius:7,padding:"5px 9px",fontSize:11}},"🗑")
-              )
-            )),
-        h("div",{style:{marginTop:presets.length?12:0,paddingTop:presets.length?12:0,borderTop:presets.length?`0.5px solid ${D.border}`:"none"}},
-          h(SavePresetForm,{onSave:savePresetHandler, busy:logBusy})
-        )
+      // Quick actions — moved below the lists
+      h("div",{style:{...card,display:"flex",gap:8,flexWrap:"wrap"}},
+        h("button",{onClick:undoLastMeal,style:{flex:"1 1 auto",background:"transparent",border:`0.5px solid ${D.border}`,color:D.muted,borderRadius:8,padding:"8px",fontSize:12}},"↩️ Undo last meal"),
+        h("button",{onClick:copyPreviousDayHandler,disabled:logBusy,style:{flex:"1 1 auto",background:"transparent",border:`0.5px solid ${D.border}`,color:D.muted,borderRadius:8,padding:"8px",fontSize:12,opacity:logBusy?0.6:1}},"📋 Copy from previous day"),
+        h("button",{onClick:toggleCheatDay,style:{flex:"1 1 auto",background:cheatDays.has(viewDate)?"#6b4fa0":"transparent",border:`0.5px solid ${cheatDays.has(viewDate)?"#6b4fa0":D.border}`,color:cheatDays.has(viewDate)?"#fff":D.muted,borderRadius:8,padding:"8px",fontSize:12}},
+          cheatDays.has(viewDate)?"❄️ Remove nutrition cheat day":`❄️ Nutrition cheat day (${freezeBal} left)`),
+        h("button",{onClick:toggleActCheatDay,style:{flex:"1 1 auto",background:actCheatDays.has(viewDate)?"#6b4fa0":"transparent",border:`0.5px solid ${actCheatDays.has(viewDate)?"#6b4fa0":D.border}`,color:actCheatDays.has(viewDate)?"#fff":D.muted,borderRadius:8,padding:"8px",fontSize:12}},
+          actCheatDays.has(viewDate)?"❄️ Remove activity rest day":`❄️ Activity rest day (${actFreezeBal} left)`)
       )
     ),
 
