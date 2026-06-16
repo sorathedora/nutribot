@@ -52,6 +52,7 @@ const COLORS = {
   act:"#a78bfa", actBg:"#1a1030",
 };
 const STEP_TARGET = 5000;
+const WEIGHT_KG = 74;
 const ACTIVITY_ICONS = {
   walk:"🚶", jog:"🏃", run:"🏃", badminton:"🏸", basketball:"🏀",
   swimming:"🏊", cycling:"🚴", yoga:"🧘", gym:"🏋️",
@@ -60,6 +61,37 @@ const ACTIVITY_ICONS = {
   boxing:"🥊", skipping:"🏃", stair:"🪜", pilates:"🤸", crossfit:"💪",
 };
 function actIcon(name){ return ACTIVITY_ICONS[name] || "🏃"; }
+// MET values — mirrors bot.py's METS dict (2011 Compendium of Physical Activities)
+const METS = {
+  walk:      {light:2.8, moderate:3.5, vigorous:5.0},
+  jog:       {light:6.0, moderate:7.0, vigorous:9.0},
+  run:       {light:8.3, moderate:9.8, vigorous:12.8},
+  badminton: {light:4.5, moderate:5.5, vigorous:7.0},
+  basketball:{light:4.5, moderate:6.5, vigorous:8.0},
+  swimming:  {light:5.0, moderate:5.8, vigorous:9.8},
+  cycling:   {light:4.0, moderate:6.8, vigorous:10.0},
+  yoga:      {light:2.0, moderate:2.5, vigorous:4.0},
+  gym:       {light:3.5, moderate:5.0, vigorous:6.0},
+  football:  {light:5.0, moderate:7.0, vigorous:10.0},
+  cricket:   {light:3.5, moderate:4.8, vigorous:6.0},
+  dancing:   {light:3.0, moderate:5.0, vigorous:7.8},
+  hiking:    {light:4.0, moderate:5.3, vigorous:7.0},
+  sex:       {light:1.8, moderate:3.0, vigorous:5.8},
+  tennis:    {light:5.0, moderate:7.3, vigorous:8.0},
+  squash:    {light:7.3, moderate:9.0, vigorous:12.1},
+  volleyball:{light:3.0, moderate:4.0, vigorous:8.0},
+  boxing:    {light:6.0, moderate:9.0, vigorous:12.8},
+  skipping:  {light:8.8, moderate:10.0,vigorous:12.3},
+  stair:     {light:4.0, moderate:6.0, vigorous:8.8},
+  pilates:   {light:2.5, moderate:3.0, vigorous:4.0},
+  crossfit:  {light:5.0, moderate:8.0, vigorous:14.0},
+};
+const ACTIVITY_LIST = Object.keys(METS);
+function calcActivityCalories(activity, durationMin, intensity){
+  const met = (METS[activity]||{})[intensity];
+  if(!met) return 0;
+  return Math.round(met * WEIGHT_KG * durationMin / 60);
+}
 
 // ── Body Goals: exercise catalog, week blocks, pull-up stages ───
 const BODY_GROUP_COLORS = {
@@ -345,6 +377,21 @@ async function apiFetchCheatDays(){
     return new Set((await r.json()).map(x=>x.date));
   } catch{ return new Set(); }
 }
+async function apiFetchActCheatDays(){
+  try{
+    const r = await fetch(`${URL_BASE}/act_cheat_days?order=date.desc`,{headers:HDRS});
+    if(!r.ok) return new Set();
+    return new Set((await r.json()).map(x=>x.date));
+  } catch{ return new Set(); }
+}
+async function apiAddActCheatDay(date){
+  const r = await fetch(`${URL_BASE}/act_cheat_days`,{method:"POST",headers:{...HDRS,"Prefer":"return=minimal"},body:JSON.stringify({date})});
+  if(!r.ok) throw new Error(r.status+" "+await r.text());
+}
+async function apiRemoveActCheatDay(date){
+  const r = await fetch(`${URL_BASE}/act_cheat_days?date=eq.${date}`,{method:"DELETE",headers:{...HDRS,"Prefer":"return=minimal"}});
+  if(!r.ok) throw new Error(r.status+" "+await r.text());
+}
 async function apiFetchSettings(){
   try{
     const r = await fetch(`${URL_BASE}/settings`,{headers:HDRS});
@@ -388,6 +435,58 @@ async function apiInsert(meal){
 async function apiDeleteToday(){
   const r = await fetch(`${URL_BASE}/meals?meal_date=eq.${todayStr()}`,{method:"DELETE",headers:{...HDRS,"Prefer":"return=minimal"}});
   if(!r.ok) throw new Error(r.status+" "+await r.text());
+}
+// ── Log tab — write functions (mirrors bot.py /edit /delete /undo /save /presets /unsave /log /copy /cheatday /workout /delworkout) ──
+async function apiUpdateMeal(id, updates){
+  const r = await fetch(`${URL_BASE}/meals?id=eq.${id}`,{method:"PATCH",headers:{...HDRS,"Prefer":"return=minimal"},body:JSON.stringify(updates)});
+  if(!r.ok) throw new Error(r.status+" "+await r.text());
+}
+async function apiDeleteMealById(id){
+  const r = await fetch(`${URL_BASE}/meals?id=eq.${id}`,{method:"DELETE",headers:{...HDRS,"Prefer":"return=minimal"}});
+  if(!r.ok) throw new Error(r.status+" "+await r.text());
+}
+async function apiInsertActivity(act){
+  const r = await fetch(`${URL_BASE}/activities`,{method:"POST",headers:{...HDRS,"Prefer":"return=representation"},body:JSON.stringify(act)});
+  if(!r.ok) throw new Error(r.status+" "+await r.text());
+  return r.json();
+}
+async function apiDeleteActivityById(id){
+  const r = await fetch(`${URL_BASE}/activities?id=eq.${id}`,{method:"DELETE",headers:{...HDRS,"Prefer":"return=minimal"}});
+  if(!r.ok) throw new Error(r.status+" "+await r.text());
+}
+async function apiSavePreset(name, macros){
+  const r = await fetch(`${URL_BASE}/presets`,{method:"POST",headers:{...HDRS,"Prefer":"resolution=merge-duplicates,return=representation"},
+    body:JSON.stringify({name:name.toLowerCase(), ...macros})});
+  if(!r.ok) throw new Error(r.status+" "+await r.text());
+  return r.json();
+}
+async function apiListPresets(){
+  try{
+    const r = await fetch(`${URL_BASE}/presets?order=name.asc`,{headers:HDRS});
+    if(!r.ok) return [];
+    return r.json();
+  } catch{ return []; }
+}
+async function apiDeletePreset(name){
+  const r = await fetch(`${URL_BASE}/presets?name=eq.${name.toLowerCase()}`,{method:"DELETE",headers:{...HDRS,"Prefer":"return=minimal"}});
+  if(!r.ok) throw new Error(r.status+" "+await r.text());
+}
+async function apiAddCheatDay(date){
+  const r = await fetch(`${URL_BASE}/cheat_days`,{method:"POST",headers:{...HDRS,"Prefer":"return=minimal"},body:JSON.stringify({date})});
+  if(!r.ok) throw new Error(r.status+" "+await r.text());
+}
+async function apiRemoveCheatDay(date){
+  const r = await fetch(`${URL_BASE}/cheat_days?date=eq.${date}`,{method:"DELETE",headers:{...HDRS,"Prefer":"return=minimal"}});
+  if(!r.ok) throw new Error(r.status+" "+await r.text());
+}
+async function apiCopyPreviousDay(targetDate){
+  const p = new Date(targetDate+"T12:00:00"); p.setDate(p.getDate()-1);
+  const prevStr = p.toISOString().split("T")[0];
+  const meals = await apiFetch(prevStr, prevStr);
+  for(const m of meals){
+    await apiInsert({meal_date:targetDate, meal_time:m.meal_time, name:m.name, cal:m.cal, protein:m.protein, carbs:m.carbs, fat:m.fat, fiber:m.fiber||0});
+  }
+  return meals.length;
 }
 
 window.logMeal = async(name,cal,protein,carbs,fat,fiber=0,timeStr=null)=>{
@@ -521,11 +620,12 @@ function Spinner(){
 
 function TabPill({label,active,onClick}){
   return h("button",{onClick,style:{
-    fontSize:12,padding:"6px 17px",borderRadius:20,
+    fontSize:"clamp(10px,2.6vw,12px)",padding:"7px 4px",borderRadius:16,
     border:`0.5px solid ${active?D.accent:D.border}`,
     background:active?D.accent:"transparent",
     color:active?D.accentText:D.muted,
-    fontWeight:active?600:400,transition:"all 0.15s"
+    fontWeight:active?600:400,transition:"all 0.15s",
+    width:"100%",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",
   }},label);
 }
 
@@ -613,8 +713,9 @@ function calcNutStreak(byDate, cheatDays){
   return streak;
 }
 
-function calcActStreak(actByDate){
-  const isValid = k => (actByDate[k]||[]).some(a=>a.calories_burned>=ACT_MIN);
+function calcActStreak(actByDate, actCheatDays){
+  const cheats = actCheatDays || new Set();
+  const isValid = k => cheats.has(k) || (actByDate[k]||[]).some(a=>a.calories_burned>=ACT_MIN);
   const today = todayStr();
   const todayDt = new Date(today+"T12:00:00");
   let streak=0;
@@ -692,6 +793,140 @@ function computePullupStageAdvance(bodyByDate, stageIndex, stageEnteredAt, today
   return stageIndex;
 }
 
+// ── Log tab — form components ────────────────────────────────
+function fieldStyle(extra){
+  return {background:D.surface,border:`0.5px solid ${D.border}`,color:D.text,borderRadius:8,padding:"7px 10px",fontSize:12,fontFamily:"inherit",...extra};
+}
+// Parses "Name words... cal protein carbs fat fiber" — trailing numeric
+// tokens (up to 5) become macros in that fixed order, the rest is the name.
+// Mirrors the shorthand pattern used when typing meals straight to the bot.
+function parseQuickMealLine(line){
+  const tokens = line.trim().split(/\s+/);
+  const nums = [];
+  let i = tokens.length-1;
+  while(i>=0 && nums.length<5 && /^-?\d+\.?\d*$/.test(tokens[i])){
+    nums.unshift(parseFloat(tokens[i])); i--;
+  }
+  if(!nums.length) return null;
+  const name = tokens.slice(0,i+1).join(" ").trim();
+  if(!name) return null;
+  const [cal=0,protein=0,carbs=0,fat=0,fiber=0] = nums;
+  return {name, cal, protein, carbs, fat, fiber};
+}
+function LogMealForm({onSubmit, busy}){
+  const [mode, setMode] = useState("quick");
+  const [line, setLine] = useState("");
+  const [lineErr, setLineErr] = useState(null);
+  const [f, setF] = useState({name:"",cal:"",protein:"",carbs:"",fat:"",fiber:""});
+  const set = (k,v) => setF(prev=>({...prev,[k]:v}));
+  const valid = f.name.trim() && f.cal!=="";
+  const modeBtn = (m,label) => h("button",{onClick:()=>setMode(m),style:{
+    flex:1,fontSize:11,padding:"5px",borderRadius:7,fontWeight:mode===m?600:400,
+    background:mode===m?D.accent:"transparent",color:mode===m?D.accentText:D.muted,
+    border:`0.5px solid ${mode===m?D.accent:D.border}`
+  }},label);
+  return h("div",null,
+    h("div",{style:{display:"flex",gap:6,marginBottom:10}}, modeBtn("quick","Quick"), modeBtn("detailed","Detailed")),
+    mode==="quick" ? h("div",null,
+      h("input",{type:"text",placeholder:"e.g. Chicken bhurji 2 dosa 400 27 41 15 2",value:line,
+        onChange:e=>{setLine(e.target.value); setLineErr(null);},
+        style:fieldStyle({width:"100%",marginBottom:6})}),
+      h("div",{style:{fontSize:10,color:D.muted,marginBottom:9,lineHeight:1.5}},
+        "Name, then numbers in order: cal · protein · carbs · fat · fiber (trailing ones optional)"),
+      lineErr&&h("div",{style:{fontSize:11,color:"#d08080",marginBottom:9}},lineErr),
+      h("button",{disabled:!line.trim()||busy,onClick:()=>{
+          const parsed = parseQuickMealLine(line);
+          if(!parsed){ setLineErr("Couldn't find a name + at least a calorie number."); return; }
+          onSubmit(parsed); setLine(""); setLineErr(null);
+        }, style:{width:"100%",background:line.trim()?D.accent:D.hint,color:line.trim()?D.accentText:D.muted,border:"none",borderRadius:8,padding:"8px",fontSize:12,fontWeight:600,opacity:busy?0.6:1}},
+        busy?"Logging...":"Log meal")
+    ) : h("div",null,
+      h("input",{type:"text",placeholder:"Meal name",value:f.name,onChange:e=>set("name",e.target.value),
+        style:fieldStyle({width:"100%",marginBottom:7})}),
+      h("div",{style:{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:6,marginBottom:9}},
+        ...[["cal","Cal"],["protein","Pro g"],["carbs","Carb g"],["fat","Fat g"],["fiber","Fiber g"]].map(([k,ph])=>
+          h("input",{key:k,type:"number",placeholder:ph,value:f[k],onChange:e=>set(k,e.target.value),style:fieldStyle({width:"100%"})})
+        )
+      ),
+      h("button",{disabled:!valid||busy,onClick:()=>{
+          onSubmit({name:f.name.trim(), cal:+f.cal||0, protein:+f.protein||0, carbs:+f.carbs||0, fat:+f.fat||0, fiber:+f.fiber||0});
+          setF({name:"",cal:"",protein:"",carbs:"",fat:"",fiber:""});
+        }, style:{width:"100%",background:valid?D.accent:D.hint,color:valid?D.accentText:D.muted,border:"none",borderRadius:8,padding:"8px",fontSize:12,fontWeight:600,opacity:busy?0.6:1}},
+        busy?"Logging...":"Log meal")
+    )
+  );
+}
+function LogWorkoutForm({onSubmit, busy}){
+  const [activity, setActivity] = useState("walk");
+  const [duration, setDuration] = useState("30");
+  const [intensity, setIntensity] = useState("moderate");
+  const cal = calcActivityCalories(activity, +duration||0, intensity);
+  const valid = activity && (+duration||0) > 0;
+  return h("div",null,
+    h("div",{style:{display:"grid",gridTemplateColumns:"1.3fr 0.8fr 1fr",gap:6,marginBottom:9}},
+      h("select",{value:activity,onChange:e=>setActivity(e.target.value),style:fieldStyle({width:"100%"})},
+        ...ACTIVITY_LIST.map(a=>h("option",{key:a,value:a},actIcon(a)+" "+a.charAt(0).toUpperCase()+a.slice(1)))),
+      h("input",{type:"number",placeholder:"min",value:duration,onChange:e=>setDuration(e.target.value),style:fieldStyle({width:"100%"})}),
+      h("select",{value:intensity,onChange:e=>setIntensity(e.target.value),style:fieldStyle({width:"100%"})},
+        ...["light","moderate","vigorous"].map(i=>h("option",{key:i,value:i},i)))
+    ),
+    h("div",{style:{fontSize:11,color:D.muted,marginBottom:9}},
+      `≈ ${cal} kcal burned`,h("span",{style:{color:cal>=ACT_MIN?D.accent:D.muted,marginLeft:6}},cal>=ACT_MIN?"✓ valid":`${ACT_MIN-cal} kcal short`)),
+    h("button",{disabled:!valid||busy,onClick:()=>onSubmit({
+        activity, duration_minutes:+duration, intensity,
+        calories_burned:cal, met_value:METS[activity][intensity]
+      }), style:{width:"100%",background:valid?D.accent:D.hint,color:valid?D.accentText:D.muted,border:"none",borderRadius:8,padding:"8px",fontSize:12,fontWeight:600,opacity:busy?0.6:1}},
+      busy?"Logging...":"Log workout")
+  );
+}
+function LogMealRow({meal, editing, onEditStart, onEditCancel, onSave, onDelete}){
+  const [f, setF] = useState(null);
+  useEffect(()=>{ if(editing) setF({cal:meal.cal,protein:meal.protein,carbs:meal.carbs,fat:meal.fat,fiber:meal.fiber||0}); },[editing]);
+  if(editing && f){
+    return h("div",{style:{padding:"10px 0",borderBottom:`0.5px solid ${D.border}`}},
+      h("div",{style:{fontSize:13,fontWeight:500,color:D.text,marginBottom:6}},meal.name),
+      h("div",{style:{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:5,marginBottom:7}},
+        ...["cal","protein","carbs","fat","fiber"].map(k=>
+          h("input",{key:k,type:"number",value:f[k],onChange:e=>setF(prev=>({...prev,[k]:+e.target.value})),style:fieldStyle({width:"100%"})}))
+      ),
+      h("div",{style:{display:"flex",gap:6}},
+        h("button",{onClick:()=>onSave(meal.id,f),style:{flex:1,background:D.accent,color:D.accentText,border:"none",borderRadius:8,padding:"6px",fontSize:11,fontWeight:600}},"Save"),
+        h("button",{onClick:onEditCancel,style:{flex:1,background:"transparent",color:D.muted,border:`0.5px solid ${D.border}`,borderRadius:8,padding:"6px",fontSize:11}},"Cancel")
+      )
+    );
+  }
+  return h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 0",borderBottom:`0.5px solid ${D.border}`}},
+    h("div",null,
+      h("div",{style:{fontSize:13,color:D.text}},meal.name),
+      h("div",{style:{fontSize:11,color:D.muted,marginTop:2}},
+        `${Math.round(meal.cal)} kcal · ${Math.round(meal.protein)}g pro · ${displayTime(meal.meal_time)}`)
+    ),
+    h("div",{style:{display:"flex",gap:5,flexShrink:0}},
+      h("button",{onClick:onEditStart,style:{background:"transparent",border:`0.5px solid ${D.border}`,color:D.muted,borderRadius:7,padding:"4px 9px",fontSize:11}},"✏️"),
+      h("button",{onClick:()=>onDelete(meal.id),style:{background:"transparent",border:`0.5px solid #5a2a2a`,color:"#d08080",borderRadius:7,padding:"4px 9px",fontSize:11}},"🗑")
+    )
+  );
+}
+function SavePresetForm({onSave, busy}){
+  const [f, setF] = useState({name:"",cal:"",protein:"",carbs:"",fat:"",fiber:""});
+  const set=(k,v)=>setF(prev=>({...prev,[k]:v}));
+  const valid = f.name.trim() && f.cal!=="";
+  return h("div",null,
+    h("input",{type:"text",placeholder:"Preset name",value:f.name,onChange:e=>set("name",e.target.value),
+      style:fieldStyle({width:"100%",marginBottom:7})}),
+    h("div",{style:{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:6,marginBottom:9}},
+      ...[["cal","Cal"],["protein","Pro g"],["carbs","Carb g"],["fat","Fat g"],["fiber","Fiber g"]].map(([k,ph])=>
+        h("input",{key:k,type:"number",placeholder:ph,value:f[k],onChange:e=>set(k,e.target.value),style:fieldStyle({width:"100%"})})
+      )
+    ),
+    h("button",{disabled:!valid||busy,onClick:()=>{
+        onSave(f.name.trim(), {cal:+f.cal||0, protein:+f.protein||0, carbs:+f.carbs||0, fat:+f.fat||0, fiber:+f.fiber||0});
+        setF({name:"",cal:"",protein:"",carbs:"",fat:"",fiber:""});
+      }, style:{width:"100%",background:"transparent",color:D.text,border:`0.5px solid ${D.border}`,borderRadius:8,padding:"7px",fontSize:12,fontWeight:500}},
+      "💾 Save preset")
+  );
+}
+
 // ── App ────────────────────────────────────────────────────────
 function App(){
   const [mainTab,  setMainTab]  = useState("summary");
@@ -709,6 +944,7 @@ function App(){
   const [actHist,  setActHist]  = useState([]);    // 90-day activity history
   const [stepsData,setSteps]    = useState({});    // { date: stepCount }
   const [cheatDays,setCD]       = useState(()=>new Set());
+  const [actCheatDays,setActCD] = useState(()=>new Set());
   const [settings, setSettings] = useState({});
   const [loading,  setLoading]  = useState(true);
   const [error,    setError]    = useState(null);
@@ -721,6 +957,13 @@ function App(){
   const [bodyCalMonth,setBodyCal]= useState(()=>todayStr().slice(0,7));
   const [bodyExp,      setBodyExp]= useState(()=>new Set([todayStr()]));
   const [schedOpen,    setSchedOpen] = useState(false);
+  const [presets,      setPresets]   = useState([]);
+  const [editMealId,   setEditMealId]= useState(null);
+  const [logBusy,      setLogBusy]   = useState(false);
+  const [logMsg,       setLogMsg]    = useState(null);
+  const [logCalOpen,   setLogCalOpen]= useState(false);
+  const [logCalMonth,  setLogCal]    = useState(()=>todayStr().slice(0,7));
+  function flashMsg(msg){ setLogMsg(msg); setTimeout(()=>setLogMsg(null), 3500); }
   const toggleBodyDay = d => setBodyExp(prev=>{ const s=new Set(prev); s.has(d)?s.delete(d):s.add(d); return s; });
 
   function goDate(d){ const dt=new Date(viewDate+"T12:00:00"); dt.setDate(dt.getDate()+d); const s=dt.toISOString().split("T")[0]; if(s<=todayStr()) setVD(s); }
@@ -747,20 +990,22 @@ function App(){
       const d90 = new Date(today+"T12:00:00"); d90.setDate(d90.getDate()-89);
       const histFrom = d90.toISOString().split("T")[0];
       try{
-        const [viewM, histM, viewA, histA, cd, sett, stps, bodyH] = await Promise.all([
+        const [viewM, histM, viewA, histA, cd, actCd, sett, stps, bodyH, presetList] = await Promise.all([
           apiFetch(viewDate, viewDate),
           apiFetch(histFrom, today),
           apiFetchActivities(viewDate, viewDate),
           apiFetchActivities(histFrom, today),
           apiFetchCheatDays(),
+          apiFetchActCheatDays(),
           apiFetchSettings(),
           apiFetchSteps(histFrom, today),
           apiFetchBodySets(histFrom, today),
+          apiListPresets(),
         ]);
         setVM(viewM); setHist(histM);
         setActs(viewA); setActHist(histA);
-        setCD(cd); setSettings(sett); setSteps(stps);
-        setBodyHist(bodyH);
+        setCD(cd); setActCD(actCd); setSettings(sett); setSteps(stps);
+        setBodyHist(bodyH); setPresets(presetList);
 
         // ── Body Goals: auto-advance block/pull-up stage + credit freezes ──
         const bByDate={}; bodyH.forEach(s=>{ (bByDate[s.set_date]=bByDate[s.set_date]||[]).push(s); });
@@ -815,7 +1060,7 @@ function App(){
   },[actHist]);
 
   const nutStreak = useMemo(()=>calcNutStreak(byDate,cheatDays),[byDate,cheatDays]);
-  const actStreak = useMemo(()=>calcActStreak(actByDate),[actByDate]);
+  const actStreak = useMemo(()=>calcActStreak(actByDate, actCheatDays),[actByDate, actCheatDays]);
   const freezeBal = parseInt(settings.freeze_balance||"0");
   const actFreezeBal = parseInt(settings.act_freeze_balance||"0");
 
@@ -844,6 +1089,73 @@ function App(){
   async function logBodySet(exercise, value){
     try{ await apiInsertBodySet(viewDate, exercise, value); refresh(); }
     catch(e){ setError(e.message); }
+  }
+
+  // ── Log tab — action handlers (mirrors bot.py write commands) ──
+  async function submitMeal(meal){
+    setLogBusy(true);
+    try{ await apiInsert({...meal, meal_date:viewDate, meal_time:fmtTime()}); flashMsg(`✓ Logged: ${meal.name}`); refresh(); }
+    catch(e){ setError(e.message); } finally{ setLogBusy(false); }
+  }
+  async function submitWorkout(act){
+    setLogBusy(true);
+    try{ await apiInsertActivity({...act, activity_date:viewDate}); flashMsg(`✓ Logged: ${act.activity}`); refresh(); }
+    catch(e){ setError(e.message); } finally{ setLogBusy(false); }
+  }
+  async function saveMealEdit(id, updates){
+    try{ await apiUpdateMeal(id, updates); setEditMealId(null); flashMsg("✓ Updated"); refresh(); }
+    catch(e){ setError(e.message); }
+  }
+  async function deleteMeal(id){
+    try{ await apiDeleteMealById(id); flashMsg("🗑 Removed"); refresh(); }
+    catch(e){ setError(e.message); }
+  }
+  async function deleteActivityEntry(id){
+    try{ await apiDeleteActivityById(id); flashMsg("🗑 Removed"); refresh(); }
+    catch(e){ setError(e.message); }
+  }
+  async function undoLastMeal(){
+    if(!viewMeals.length){ flashMsg("Nothing to undo."); return; }
+    const last = [...viewMeals].sort((a,b)=>(a.logged_at||"").localeCompare(b.logged_at||""))[viewMeals.length-1];
+    try{ await apiDeleteMealById(last.id); flashMsg(`↩️ Removed: ${last.name}`); refresh(); }
+    catch(e){ setError(e.message); }
+  }
+  async function savePresetHandler(name, macros){
+    try{ await apiSavePreset(name, macros); flashMsg(`💾 Saved ${name}`); refresh(); }
+    catch(e){ setError(e.message); }
+  }
+  async function logFromPreset(p){
+    setLogBusy(true);
+    try{ await apiInsert({name:p.name, cal:p.cal, protein:p.protein, carbs:p.carbs, fat:p.fat, fiber:p.fiber||0, meal_date:viewDate, meal_time:fmtTime()});
+      flashMsg(`✓ Logged: ${p.name}`); refresh(); }
+    catch(e){ setError(e.message); } finally{ setLogBusy(false); }
+  }
+  async function deletePresetHandler(name){
+    try{ await apiDeletePreset(name); flashMsg(`🗑 Removed preset ${name}`); refresh(); }
+    catch(e){ setError(e.message); }
+  }
+  async function toggleCheatDay(){
+    const isCheat = cheatDays.has(viewDate);
+    if(!isCheat && freezeBal<=0){ flashMsg("❌ No nutrition freezes available."); return; }
+    try{
+      if(isCheat){ await apiRemoveCheatDay(viewDate); flashMsg("Cheat day removed"); }
+      else{ await apiAddCheatDay(viewDate); flashMsg("❄️ Cheat day activated"); }
+      refresh();
+    } catch(e){ setError(e.message); }
+  }
+  async function toggleActCheatDay(){
+    const isCheat = actCheatDays.has(viewDate);
+    if(!isCheat && actFreezeBal<=0){ flashMsg("❌ No activity freezes available."); return; }
+    try{
+      if(isCheat){ await apiRemoveActCheatDay(viewDate); flashMsg("Activity rest day removed"); }
+      else{ await apiAddActCheatDay(viewDate); flashMsg("❄️ Activity rest day activated"); }
+      refresh();
+    } catch(e){ setError(e.message); }
+  }
+  async function copyPreviousDayHandler(){
+    setLogBusy(true);
+    try{ const n = await apiCopyPreviousDay(viewDate); flashMsg(n>0?`📋 Copied ${n} meal${n!==1?"s":""} from the previous day`:"Nothing to copy from the previous day."); refresh(); }
+    catch(e){ setError(e.message); } finally{ setLogBusy(false); }
   }
 
   async function seedToday(){
@@ -903,12 +1215,13 @@ function App(){
       )
     ),
 
-    // Main tab nav
-    h("div",{style:{display:"flex",gap:6,marginBottom:"1.5rem",flexWrap:"wrap"}},
-      h(TabPill,{label:"Summary",    active:mainTab==="summary",    onClick:()=>setMainTab("summary")}),
-      h(TabPill,{label:"Nutrition",  active:mainTab==="nutrition",  onClick:()=>setMainTab("nutrition")}),
-      h(TabPill,{label:"Activity",   active:mainTab==="activity",   onClick:()=>setMainTab("activity")}),
-      h(TabPill,{label:"Body Goals", active:mainTab==="body",       onClick:()=>setMainTab("body")})
+    // Main tab nav — equal-width grid so it never wraps unevenly, and shrinks gracefully
+    h("div",{style:{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:4,marginBottom:"1.5rem"}},
+      h(TabPill,{label:"Summary",  active:mainTab==="summary",  onClick:()=>setMainTab("summary")}),
+      h(TabPill,{label:"Nutrition",active:mainTab==="nutrition",onClick:()=>setMainTab("nutrition")}),
+      h(TabPill,{label:"Activity", active:mainTab==="activity", onClick:()=>setMainTab("activity")}),
+      h(TabPill,{label:"Body",     active:mainTab==="body",     onClick:()=>setMainTab("body")}),
+      h(TabPill,{label:"Log",      active:mainTab==="log",      onClick:()=>setMainTab("log")})
     ),
 
     error&&h("div",{style:{...card,background:"#1a0808",border:`0.5px solid #5a1a1a`,color:"#f08080",fontSize:13,lineHeight:1.6}},
@@ -1592,6 +1905,111 @@ function App(){
           )
         )
       )
+      )
+    ),
+
+    // ═══════════════════════════════════════════════════════
+    // LOG TAB — manual logging UI, full parity with bot.py write commands
+    // ═══════════════════════════════════════════════════════
+    !loading&&mainTab==="log"&&h("div",{className:"fade"},
+
+      logMsg&&h("div",{style:{...card,background:"#0f1f0a",border:`0.5px solid #2a4a1a`,color:D.accent,fontSize:12,textAlign:"center",padding:"8px 12px"}},logMsg),
+
+      // Date seeker — every action below operates on this date
+      h("div",{style:{display:"flex",alignItems:"center",gap:8,marginBottom:12}},
+        h("button",{onClick:()=>goDate(-1),style:{background:"transparent",border:`0.5px solid ${D.border}`,color:D.muted,borderRadius:8,padding:"4px 13px",fontSize:16,lineHeight:1}},"‹"),
+        h("input",{type:"date",value:viewDate,max:today,onChange:e=>e.target.value&&setVD(e.target.value),
+          style:{background:D.card,border:`0.5px solid ${D.border}`,color:D.text,borderRadius:8,padding:"5px 10px",fontSize:12,fontFamily:"inherit",flex:1,colorScheme:"dark"}}),
+        viewDate<today&&h("button",{onClick:()=>setVD(today),style:{fontSize:11,padding:"5px 12px",borderRadius:8,background:D.accent,color:D.accentText,border:"none",fontWeight:600,whiteSpace:"nowrap"}},"Today"),
+        h("button",{onClick:()=>goDate(1),disabled:viewDate>=today,style:{background:"transparent",border:`0.5px solid ${D.border}`,color:viewDate>=today?D.hint:D.muted,borderRadius:8,padding:"4px 13px",fontSize:16,lineHeight:1}},"›")
+      ),
+      h("div",{style:card},
+        h("div",{onClick:()=>setLogCalOpen(o=>!o),style:{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}},
+          h("div",{style:{...sHead,marginBottom:0}},"📅 Pick a date"),
+          h("span",{style:{fontSize:13,color:D.muted,display:"inline-block",transform:logCalOpen?"rotate(90deg)":"none",transition:"transform 0.2s"}},"›")
+        ),
+        logCalOpen&&h("div",{style:{marginTop:12}},
+          h(MonthCalendar,{
+            month:logCalMonth, onPrev:()=>navMonth(setLogCal,-1), onNext:()=>navMonth(setLogCal,+1),
+            today, minMonth:minCalMonth, onDayClick:key=>{ setVD(key); setLogCalOpen(false); },
+            getCellBg:key=>{
+              const has = (byDate[key]||[]).length>0 || (actByDate[key]||[]).length>0;
+              return has?"#2a3a1a":D.hint;
+            },
+          })
+        )
+      ),
+
+      // Log a meal — for the selected date
+      h("div",{style:card},
+        h("div",{style:sHead},viewDate===today?"Log a meal":`Log a meal — ${fmtDate(viewDate)}`),
+        h(LogMealForm,{onSubmit:submitMeal, busy:logBusy})
+      ),
+
+      // Log a workout — for the selected date
+      h("div",{style:card},
+        h("div",{style:sHead},viewDate===today?"Log a workout":`Log a workout — ${fmtDate(viewDate)}`),
+        h(LogWorkoutForm,{onSubmit:submitWorkout, busy:logBusy})
+      ),
+
+      // Quick actions
+      h("div",{style:{...card,display:"flex",gap:8,flexWrap:"wrap"}},
+        h("button",{onClick:undoLastMeal,style:{flex:"1 1 auto",background:"transparent",border:`0.5px solid ${D.border}`,color:D.muted,borderRadius:8,padding:"8px",fontSize:12}},"↩️ Undo last meal"),
+        h("button",{onClick:copyPreviousDayHandler,disabled:logBusy,style:{flex:"1 1 auto",background:"transparent",border:`0.5px solid ${D.border}`,color:D.muted,borderRadius:8,padding:"8px",fontSize:12,opacity:logBusy?0.6:1}},"📋 Copy from previous day"),
+        h("button",{onClick:toggleCheatDay,style:{flex:"1 1 auto",background:cheatDays.has(viewDate)?"#6b4fa0":"transparent",border:`0.5px solid ${cheatDays.has(viewDate)?"#6b4fa0":D.border}`,color:cheatDays.has(viewDate)?"#fff":D.muted,borderRadius:8,padding:"8px",fontSize:12}},
+          cheatDays.has(viewDate)?"❄️ Remove nutrition cheat day":`❄️ Nutrition cheat day (${freezeBal} left)`),
+        h("button",{onClick:toggleActCheatDay,style:{flex:"1 1 auto",background:actCheatDays.has(viewDate)?"#6b4fa0":"transparent",border:`0.5px solid ${actCheatDays.has(viewDate)?"#6b4fa0":D.border}`,color:actCheatDays.has(viewDate)?"#fff":D.muted,borderRadius:8,padding:"8px",fontSize:12}},
+          actCheatDays.has(viewDate)?"❄️ Remove activity rest day":`❄️ Activity rest day (${actFreezeBal} left)`)
+      ),
+
+      // Meals — edit/delete, for the selected date
+      h("div",{style:card},
+        h("div",{style:sHead},viewDate===today?"Today's meals":`Meals — ${fmtDate(viewDate)}`),
+        viewMeals.length===0
+          ?h(Empty,{icon:"🥗",text:"No meals logged on this day."})
+          :viewMeals.map(m=>h(LogMealRow,{
+              key:m.id, meal:m, editing:editMealId===m.id,
+              onEditStart:()=>setEditMealId(m.id), onEditCancel:()=>setEditMealId(null),
+              onSave:saveMealEdit, onDelete:deleteMeal
+            }))
+      ),
+
+      // Activities — delete, for the selected date
+      h("div",{style:card},
+        h("div",{style:sHead},viewDate===today?"Today's activities":`Activities — ${fmtDate(viewDate)}`),
+        acts.length===0
+          ?h(Empty,{icon:"🏃",text:"No activities logged on this day."})
+          :acts.map(a=>h("div",{key:a.id,style:{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 0",borderBottom:`0.5px solid ${D.border}`}},
+              h("div",{style:{display:"flex",alignItems:"center",gap:8}},
+                h("span",{style:{fontSize:16}},actIcon(a.activity)),
+                h("div",null,
+                  h("div",{style:{fontSize:13,color:D.text}},a.activity.charAt(0).toUpperCase()+a.activity.slice(1)),
+                  h("div",{style:{fontSize:11,color:D.muted,marginTop:2}},`${a.duration_minutes}min · ${a.intensity} · ${a.calories_burned} kcal`)
+                )
+              ),
+              h("button",{onClick:()=>deleteActivityEntry(a.id),style:{background:"transparent",border:`0.5px solid #5a2a2a`,color:"#d08080",borderRadius:7,padding:"4px 9px",fontSize:11,flexShrink:0}},"🗑")
+            ))
+      ),
+
+      // Presets
+      h("div",{style:card},
+        h("div",{style:sHead},"Presets"),
+        presets.length===0
+          ?h("div",{style:{fontSize:12,color:D.muted,marginBottom:10}},"No saved presets yet.")
+          :presets.map(p=>h("div",{key:p.name,style:{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`0.5px solid ${D.border}`}},
+              h("div",null,
+                h("div",{style:{fontSize:13,color:D.text,fontWeight:500}},p.name),
+                h("div",{style:{fontSize:11,color:D.muted,marginTop:2}},
+                  `${Math.round(p.cal)} kcal · ${Math.round(p.protein)}g pro · ${Math.round(p.carbs)}g carb · ${Math.round(p.fat)}g fat · ${Math.round(p.fiber||0)}g fiber`)
+              ),
+              h("div",{style:{display:"flex",gap:5,flexShrink:0}},
+                h("button",{onClick:()=>logFromPreset(p),disabled:logBusy,style:{background:D.accent,color:D.accentText,border:"none",borderRadius:7,padding:"5px 11px",fontSize:11,fontWeight:600}},"Log"),
+                h("button",{onClick:()=>deletePresetHandler(p.name),style:{background:"transparent",border:`0.5px solid #5a2a2a`,color:"#d08080",borderRadius:7,padding:"5px 9px",fontSize:11}},"🗑")
+              )
+            )),
+        h("div",{style:{marginTop:presets.length?12:0,paddingTop:presets.length?12:0,borderTop:presets.length?`0.5px solid ${D.border}`:"none"}},
+          h(SavePresetForm,{onSave:savePresetHandler, busy:logBusy})
+        )
       )
     ),
 
