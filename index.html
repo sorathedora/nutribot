@@ -962,7 +962,48 @@ function App(){
   const [editMealId,   setEditMealId]= useState(null);
   const [logBusy,      setLogBusy]   = useState(false);
   const [logMsg,       setLogMsg]    = useState(null);
+  const [todaySummary, setTodaySummary] = useState(null);
+  const [summaryBusy,  setSummaryBusy] = useState(false);
   function flashMsg(msg){ setLogMsg(msg); setTimeout(()=>setLogMsg(null), 3500); }
+
+  function legacyCopy(text, onDone){
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.cssText = "position:fixed;top:-9999px;left:-9999px;opacity:0";
+    document.body.appendChild(ta);
+    ta.focus(); ta.select();
+    try{ document.execCommand("copy"); onDone("Copied!"); }
+    catch(e){ onDone("Copy failed — select text manually."); }
+    document.body.removeChild(ta);
+  }
+
+  async function fetchTodaySummary(){
+    setSummaryBusy(true);
+    try{
+      const d = todayStr();
+      const [mR, aR] = await Promise.all([
+        fetch(`${URL_BASE}/meals?meal_date=eq.${d}&order=logged_at.asc`,{headers:HDRS}),
+        fetch(`${URL_BASE}/activities?activity_date=eq.${d}`,{headers:HDRS})
+      ]);
+      const meals = mR.ok ? await mR.json() : [];
+      const activities = aR.ok ? await aR.json() : [];
+      const cal     = Math.round(meals.reduce((s,m)=>s+(m.cal||0),0));
+      const protein = Math.round(meals.reduce((s,m)=>s+(m.protein||0),0));
+      const carbs   = Math.round(meals.reduce((s,m)=>s+(m.carbs||0),0));
+      const fat     = Math.round(meals.reduce((s,m)=>s+(m.fat||0),0));
+      const fiber   = Math.round(meals.reduce((s,m)=>s+(m.fiber||0),0));
+      const burned  = Math.round(activities.reduce((s,a)=>s+(a.calories_burned||0),0));
+      const macroLine = `Cal: ${cal}/${TARGETS.cal} kcal | Pro: ${protein}/${TARGETS.protein}g | Carbs: ${carbs}/${TARGETS.carbs}g | Fat: ${fat}/${TARGETS.fat}g | Fiber: ${fiber}/${TARGETS.fiber}g | Burned: ${burned} kcal`;
+      const mealLine = meals.length
+        ? `Meals: ${meals.map(m=>m.name).join(", ")}`
+        : "Meals: none";
+      const actLine = activities.length
+        ? `Activity: ${activities.map(a=>`${a.activity} ${a.duration_minutes}min`).join(", ")}`
+        : "Activity: none";
+      setTodaySummary(`${macroLine}\n${mealLine}\n${actLine}`);
+    }catch(e){ setTodaySummary("Failed to fetch today's summary."); }
+    finally{ setSummaryBusy(false); }
+  }
   const toggleBodyDay = d => setBodyExp(prev=>{ const s=new Set(prev); s.has(d)?s.delete(d):s.add(d); return s; });
 
   function goDate(d){ const dt=new Date(viewDate+"T12:00:00"); dt.setDate(dt.getDate()+d); const s=dt.toISOString().split("T")[0]; if(s<=todayStr()) setVD(s); }
@@ -1994,6 +2035,25 @@ function App(){
           cheatDays.has(viewDate)?"❄️ Remove nutrition cheat day":`❄️ Nutrition cheat day (${freezeBal} left)`),
         h("button",{onClick:toggleActCheatDay,style:{flex:"1 1 auto",background:actCheatDays.has(viewDate)?"#6b4fa0":"transparent",border:`0.5px solid ${actCheatDays.has(viewDate)?"#6b4fa0":D.border}`,color:actCheatDays.has(viewDate)?"#fff":D.muted,borderRadius:8,padding:"8px",fontSize:12}},
           actCheatDays.has(viewDate)?"❄️ Remove activity rest day":`❄️ Activity rest day (${actFreezeBal} left)`)
+      ),
+
+      h("div",{style:{marginTop:4}},
+        h("div",{style:{display:"flex",gap:8,marginBottom:todaySummary?8:0}},
+          h("button",{onClick:fetchTodaySummary,disabled:summaryBusy,style:{flex:1,background:D.card,border:`0.5px solid ${D.border}`,color:D.text,borderRadius:8,padding:"9px",fontSize:12,fontWeight:500,opacity:summaryBusy?0.6:1}},
+            summaryBusy?"Loading…":"Today"),
+          h("button",{
+            onClick:()=>{
+              if(!todaySummary) return;
+              if(navigator.clipboard){
+                navigator.clipboard.writeText(todaySummary).then(()=>flashMsg("Copied!")).catch(()=>legacyCopy(todaySummary,flashMsg));
+              } else { legacyCopy(todaySummary,flashMsg); }
+            },
+            disabled:!todaySummary,
+            style:{flex:1,background:D.card,border:`0.5px solid ${D.border}`,color:todaySummary?D.text:D.hint,borderRadius:8,padding:"9px",fontSize:12,fontWeight:500,opacity:todaySummary?1:0.4}
+          },"Copy")
+        ),
+        todaySummary&&h("div",{style:{background:D.surface,border:`0.5px solid ${D.border}`,borderRadius:8,padding:"10px 12px",fontSize:12,color:D.muted,lineHeight:1.6,wordBreak:"break-word"}},
+          todaySummary)
       )
     ),
 
