@@ -477,6 +477,12 @@ async function apiDeletePreset(name){
   const r = await fetch(`${URL_BASE}/presets?name=eq.${name.toLowerCase()}`,{method:"DELETE",headers:{...getHDRS(),"Prefer":"return=minimal"}});
   if(!r.ok) throw new Error(r.status+" "+await r.text());
 }
+async function apiUpsertSteps(date, steps){
+  const r = await fetch(`${URL_BASE}/daily_steps`,{method:"POST",
+    headers:{...getHDRS(),"Prefer":"resolution=merge-duplicates"},
+    body:JSON.stringify({step_date:date, steps:parseInt(steps), user_id:getUserId()})});
+  if(!r.ok) throw new Error(r.status+" "+await r.text());
+}
 async function apiAddCheatDay(date){
   const r = await fetch(`${URL_BASE}/cheat_days`,{method:"POST",headers:{...getHDRS(),"Prefer":"return=minimal"},body:JSON.stringify({date,user_id:getUserId()})});
   if(!r.ok) throw new Error(r.status+" "+await r.text());
@@ -1246,6 +1252,7 @@ function App(){
   const [logMsg,       setLogMsg]    = useState(null);
   const [todaySummary, setTodaySummary] = useState(null);
   const [summaryBusy,  setSummaryBusy] = useState(false);
+  const [stepInput,    setStepInput]   = useState("");
   function flashMsg(msg){ setLogMsg(msg); setTimeout(()=>setLogMsg(null), 3500); }
 
   function legacyCopy(text, onDone){
@@ -1620,9 +1627,6 @@ function App(){
             "💪 ",h("strong",{style:{fontWeight:600}},bodyStreak),h("span",{style:{color:D.muted}},"body")),
           (freezeBal>0||actFreezeBal>0||bodyFreezeBal>0)&&h("div",{style:{background:D.card,border:`0.5px solid #4a3a6a`,borderRadius:20,padding:"5px 13px",fontSize:12,color:"#b09ad0",display:"flex",gap:6,alignItems:"center"}},
             "❄️ ",h("strong",{style:{fontWeight:600}},freezeBal+actFreezeBal+bodyFreezeBal)),
-          viewMeals.length===0&&!loading&&viewDate===today&&h("button",{onClick:seedToday,disabled:seeding,
-            style:{background:D.accent,color:D.accentText,border:"none",borderRadius:20,padding:"6px 15px",fontSize:12,fontWeight:600,opacity:seeding?0.6:1}},
-            seeding?"Logging...":"↑ Sample day"),
           h("button",{onClick:refresh,style:{background:"transparent",color:D.muted,border:`0.5px solid ${D.border}`,borderRadius:20,padding:"5px 13px",fontSize:13}},"↻"),
           h("button",{onClick:()=>setShowProfile(true),style:{background:"transparent",color:D.muted,border:`0.5px solid ${D.border}`,borderRadius:20,padding:"5px 13px",fontSize:13}},"👤")
         )
@@ -2411,6 +2415,31 @@ function App(){
           cheatDays.has(viewDate)?"❄️ Remove nutrition cheat day":`❄️ Nutrition cheat day (${freezeBal} left)`),
         h("button",{onClick:toggleActCheatDay,style:{flex:"1 1 auto",background:actCheatDays.has(viewDate)?"#6b4fa0":"transparent",border:`0.5px solid ${actCheatDays.has(viewDate)?"#6b4fa0":D.border}`,color:actCheatDays.has(viewDate)?"#fff":D.muted,borderRadius:8,padding:"8px",fontSize:12}},
           actCheatDays.has(viewDate)?"❄️ Remove activity rest day":`❄️ Activity rest day (${actFreezeBal} left)`)
+      ),
+
+      // Log steps
+      h("div",{style:card},
+        h("div",{style:sHead},"Steps"),
+        h("div",{style:{display:"flex",gap:8,alignItems:"center"}},
+          h("input",{
+            type:"number",min:0,step:100,
+            placeholder: stepsData[viewDate]!==undefined ? `Current: ${stepsData[viewDate].toLocaleString()}` : "Enter step count",
+            value:stepInput,
+            onChange:e=>setStepInput(e.target.value),
+            style:{flex:1,background:D.surface,border:`0.5px solid ${D.border}`,color:D.text,borderRadius:8,padding:"9px 12px",fontSize:13,fontFamily:"inherit",outline:"none"}
+          }),
+          h("button",{
+            onClick:async()=>{
+              if(!stepInput) return;
+              setLogBusy(true);
+              try{ await apiUpsertSteps(viewDate, stepInput); flashMsg("✓ Steps saved"); setStepInput(""); refresh(); }
+              catch(e){ setError(e.message); }
+              finally{ setLogBusy(false); }
+            },
+            disabled:logBusy||!stepInput,
+            style:{background:D.accent,color:D.accentText,border:"none",borderRadius:8,padding:"9px 18px",fontSize:13,fontWeight:600,cursor:"pointer",opacity:(!stepInput||logBusy)?0.5:1}
+          },"Save")
+        )
       ),
 
       h("div",{style:{marginTop:4}},
