@@ -35,6 +35,7 @@ const { useState, useEffect, useCallback, useMemo, createElement: h, Fragment } 
 const URL_BASE = "https://uikwwjmzrrxdvwmyguwv.supabase.co/rest/v1";
 const ANON_KEY = "sb_publishable_w9mMEmA0mGbQRs7s8ng76w_FX8hqqPd";
 const SUPABASE_URL = "https://uikwwjmzrrxdvwmyguwv.supabase.co";
+const COACH_ENDPOINT = SUPABASE_URL + "/functions/v1/coach";
 const _sb = supabase.createClient(SUPABASE_URL, ANON_KEY, {auth:{persistSession:true,autoRefreshToken:true}});
 let _session = null;
 const getHDRS = () => ({ "Content-Type":"application/json", apikey:ANON_KEY, Authorization:"Bearer "+(_session?.access_token||ANON_KEY) });
@@ -66,6 +67,16 @@ const ACTIVITY_ICONS = {
   boxing:"🥊", skipping:"🏃", stair:"🪜", pilates:"🤸", crossfit:"💪",
 };
 function actIcon(name){ return ACTIVITY_ICONS[name] || "🏃"; }
+
+const COACH_TOOLS = [
+  {name:"log_meal",description:"Log a meal entry for the user",
+   parameters:{type:"object",required:["name","cal","protein","carbs","fat","fiber"],
+     properties:{name:{type:"string"},cal:{type:"number"},protein:{type:"number"},carbs:{type:"number"},fat:{type:"number"},fiber:{type:"number"}}}},
+  {name:"update_targets",description:"Update the user's daily macro targets",
+   parameters:{type:"object",properties:{cal:{type:"number"},protein:{type:"number"},carbs:{type:"number"},fat:{type:"number"},fiber:{type:"number"}}}},
+  {name:"log_weight",description:"Log the user's body weight in kg",
+   parameters:{type:"object",required:["weight_kg"],properties:{weight_kg:{type:"number"}}}},
+];
 // MET values — mirrors bot.py's METS dict (2011 Compendium of Physical Activities)
 const METS = {
   walk:      {light:2.8, moderate:3.5, vigorous:5.0},
@@ -476,6 +487,20 @@ async function apiListPresets(){
 async function apiDeletePreset(name){
   const r = await fetch(`${URL_BASE}/presets?name=eq.${name.toLowerCase()}`,{method:"DELETE",headers:{...getHDRS(),"Prefer":"return=minimal"}});
   if(!r.ok) throw new Error(r.status+" "+await r.text());
+}
+async function apiFetchMeasurements(){
+  try{
+    const r = await fetch(`${URL_BASE}/measurements?order=measured_at.desc&limit=60`,{headers:getHDRS()});
+    if(!r.ok) return [];
+    return r.json();
+  } catch{ return []; }
+}
+async function apiLogMeasurement(data){
+  const r = await fetch(`${URL_BASE}/measurements`,{method:"POST",
+    headers:{...getHDRS(),"Prefer":"return=representation"},
+    body:JSON.stringify({...data, user_id:getUserId()})});
+  if(!r.ok) throw new Error(r.status+" "+await r.text());
+  return r.json();
 }
 async function apiUpsertSteps(date, steps){
   const r = await fetch(`${URL_BASE}/daily_steps`,{method:"POST",
@@ -1253,6 +1278,12 @@ function App(){
   const [todaySummary, setTodaySummary] = useState(null);
   const [summaryBusy,  setSummaryBusy] = useState(false);
   const [stepInput,    setStepInput]   = useState("");
+  const [measurements, setMeasurements] = useState([]);
+  const [weightInput,  setWeightInput]  = useState("");
+  const [coachMsgs,    setCoachMsgs]   = useState([{role:"assistant",text:"Hey! I'm your fitness coach 👋\n\nTell me what you ate and I'll log it, ask about nutrition, or discuss your goals. Try: \"I had 3 eggs and toast for breakfast\""}]);
+  const [geminiHist,   setGeminiHist]  = useState([]);
+  const [coachInput,   setCoachInput]  = useState("");
+  const [coachBusy,    setCoachBusy]   = useState(false);
   function flashMsg(msg){ setLogMsg(msg); setTimeout(()=>setLogMsg(null), 3500); }
 
   function legacyCopy(text, onDone){
@@ -1335,7 +1366,7 @@ function App(){
       const d90 = new Date(today+"T12:00:00"); d90.setDate(d90.getDate()-89);
       const histFrom = d90.toISOString().split("T")[0];
       try{
-        const [viewM, histM, viewA, histA, cd, actCd, sett, stps, bodyH, presetList] = await Promise.all([
+        const [viewM, histM, viewA, histA, cd, actCd, sett, stps, bodyH, presetList, measList] = await Promise.all([
           apiFetch(viewDate, viewDate),
           apiFetch(histFrom, today),
           apiFetchActivities(viewDate, viewDate),
@@ -1346,11 +1377,12 @@ function App(){
           apiFetchSteps(histFrom, today),
           apiFetchBodySets(histFrom, today),
           apiListPresets(),
+          apiFetchMeasurements(),
         ]);
         setVM(viewM); setHist(histM);
         setActs(viewA); setActHist(histA);
         setCD(cd); setActCD(actCd); setSettings(sett); setSteps(stps);
-        setBodyHist(bodyH); setPresets(presetList);
+        setBodyHist(bodyH); setPresets(presetList); setMeasurements(measList);
 
         // ── Body Goals: auto-advance block/pull-up stage + credit freezes ──
         const bByDate={}; bodyH.forEach(s=>{ (bByDate[s.set_date]=bByDate[s.set_date]||[]).push(s); });
@@ -1584,10 +1616,95 @@ function App(){
   const avgDayPct={};
   topSources.forEach(([label])=>{ const active=Object.keys(daySourceMap).filter(d=>daySourceMap[d][label]&&dayTotalMap[d]>0); avgDayPct[label]=active.length?Math.round(active.reduce((s,d)=>s+(daySourceMap[d][label]/dayTotalMap[d])*100,0)/active.length):0; });
 
+  function buildCoachSystemPrompt(){
+    const latest = measurements[0];
+    return `You are an intelligent fitness and nutrition coach embedded in NutriTrack.
+
+USER CONTEXT (${todayStr()}):
+- Daily targets: ${TARGETS.cal} kcal | ${TARGETS.protein}g protein | ${TARGETS.carbs}g carbs | ${TARGETS.fat}g fat | ${TARGETS.fiber}g fiber
+- Eaten today: ${Math.round(totals.cal)} kcal | ${Math.round(totals.protein)}g protein | ${Math.round(totals.carbs)}g carbs | ${Math.round(totals.fat)}g fat
+- Nutrition streak: ${nutStreak} days | Activity streak: ${actStreak} days
+${latest ? `- Latest weight: ${latest.weight_kg}kg (${latest.measured_at})` : "- Weight: not tracked yet"}
+
+CAPABILITIES — you can take direct actions:
+1. log_meal — when user describes food, estimate macros accurately and log it
+2. update_targets — when user wants to change their daily goals
+3. log_weight — when user mentions their weight
+
+STYLE: Concise, warm, practical. Good at Indian food macros. Always metric units. When logging a meal, confirm what you logged with the macro breakdown.`;
+  }
+
+  async function sendCoachMessage(text){
+    setCoachBusy(true);
+    const userEntry = {role:"user", parts:[{text}]};
+    const newHist = [...geminiHist, userEntry];
+    setGeminiHist(newHist);
+    setCoachMsgs(prev=>[...prev, {role:"user", text}]);
+    setCoachInput("");
+
+    async function callGemini(hist){
+      const res = await fetch(COACH_ENDPOINT, {
+        method:"POST",
+        headers:{...getHDRS(),"Content-Type":"application/json"},
+        body:JSON.stringify({history:hist, systemPrompt:buildCoachSystemPrompt(), tools:COACH_TOOLS}),
+      });
+      if(!res.ok) throw new Error("Coach unavailable ("+res.status+")");
+      const json = await res.json();
+      if(json.error) throw new Error(json.error);
+      return json.parts||[];
+    }
+
+    try{
+      let parts = await callGemini(newHist);
+      const fnCalls = parts.filter(p=>p.functionCall);
+      const textParts = parts.filter(p=>p.text);
+
+      // Execute tool calls
+      const toolResults = [];
+      for(const p of fnCalls){
+        const {name, args} = p.functionCall;
+        try{
+          if(name==="log_meal"){
+            await apiInsert({name:args.name,cal:args.cal,protein:args.protein,carbs:args.carbs,fat:args.fat,fiber:args.fiber||0,meal_date:viewDate,meal_time:fmtTime()});
+            toolResults.push({name, response:{success:true}});
+            setCoachMsgs(prev=>[...prev,{role:"tool",text:`✓ Logged: ${args.name} — ${Math.round(args.cal)} kcal · ${Math.round(args.protein)}g pro`}]);
+            refresh();
+          } else if(name==="update_targets"){
+            const pairs = Object.entries({cal_target:args.cal,protein_target:args.protein,carbs_target:args.carbs,fat_target:args.fat,fiber_target:args.fiber}).filter(([,v])=>v!=null);
+            await Promise.all(pairs.map(([k,v])=>apiUpsertSetting(k,String(v))));
+            toolResults.push({name, response:{success:true}});
+            setCoachMsgs(prev=>[...prev,{role:"tool",text:"✓ Targets updated"}]);
+            refresh();
+          } else if(name==="log_weight"){
+            await apiLogMeasurement({measured_at:todayStr(), weight_kg:args.weight_kg});
+            toolResults.push({name, response:{success:true}});
+            setCoachMsgs(prev=>[...prev,{role:"tool",text:`✓ Weight logged: ${args.weight_kg} kg`}]);
+            refresh();
+          }
+        } catch(e){ toolResults.push({name, response:{error:e.message}}); }
+      }
+
+      // If tools were called, send results back for final reply
+      let finalHist = [...newHist, {role:"model",parts}];
+      if(fnCalls.length>0){
+        const toolMsg = {role:"user", parts:toolResults.map(({name,response})=>({functionResponse:{name,response}}))};
+        finalHist = [...finalHist, toolMsg];
+        parts = await callGemini(finalHist);
+        finalHist = [...finalHist, {role:"model",parts}];
+      }
+      setGeminiHist(finalHist);
+
+      const reply = parts.filter(p=>p.text).map(p=>p.text).join("").trim();
+      if(reply) setCoachMsgs(prev=>[...prev,{role:"assistant",text:reply}]);
+    } catch(e){
+      setCoachMsgs(prev=>[...prev,{role:"error",text:e.message}]);
+    } finally{ setCoachBusy(false); }
+  }
+
   const trackNutrition = settings.track_nutrition!=="0";
   const trackActivity  = settings.track_activity!=="0";
   const trackBody      = settings.track_body!=="0";
-  const tabCount = 2 + (trackNutrition?1:0) + (trackActivity?1:0) + (trackBody?1:0);
+  const tabCount = 3 + (trackNutrition?1:0) + (trackActivity?1:0) + (trackBody?1:0);
 
   // ── render ─────────────────────────────────────────────────
   if(appPhase==="booting")
@@ -1639,7 +1756,8 @@ function App(){
       trackNutrition&&h(TabPill,{label:"Nutrition",active:mainTab==="nutrition",onClick:()=>setMainTab("nutrition")}),
       trackActivity &&h(TabPill,{label:"Activity", active:mainTab==="activity", onClick:()=>setMainTab("activity")}),
       trackBody     &&h(TabPill,{label:"Body",     active:mainTab==="body",     onClick:()=>setMainTab("body")}),
-      h(TabPill,{label:"Log",      active:mainTab==="log",      onClick:()=>setMainTab("log")})
+      h(TabPill,{label:"Log",      active:mainTab==="log",      onClick:()=>setMainTab("log")}),
+      h(TabPill,{label:"Coach",    active:mainTab==="coach",    onClick:()=>setMainTab("coach")})
     ),
 
     error&&h("div",{style:{...card,background:"#1a0808",border:`0.5px solid #5a1a1a`,color:"#f08080",fontSize:13,lineHeight:1.6}},
@@ -2599,6 +2717,90 @@ function App(){
 
     h("div",{style:{textAlign:"center",fontSize:11,color:"#2a2a26",marginTop:"1.5rem",paddingBottom:"2rem"}},
       "Log meals and workouts · tap any calendar day to see history"),
+
+    // ═══════════════════════════════════════════════════════
+    // COACH TAB
+    // ═══════════════════════════════════════════════════════
+    !loading&&mainTab==="coach"&&h("div",{className:"fade",style:{display:"flex",flexDirection:"column",gap:"1.5rem"}},
+
+      // Weight log card
+      h("div",{style:{...card}},
+        h("div",{style:{fontWeight:600,fontSize:15,marginBottom:12}},"Log Weight"),
+        h("div",{style:{display:"flex",gap:8}},
+          h("input",{
+            type:"number",step:"0.1",placeholder:"kg",
+            value:weightInput,
+            onChange:e=>setWeightInput(e.target.value),
+            style:fieldStyle({flex:1,fontSize:15}),
+          }),
+          h("button",{
+            onClick:async()=>{
+              if(!weightInput) return;
+              try{
+                await apiLogMeasurement({measured_at:todayStr(),weight_kg:parseFloat(weightInput)});
+                setWeightInput(""); refresh();
+              }catch(e){ alert("Error: "+e.message); }
+            },
+            style:{background:D.accent,color:D.accentText,border:"none",borderRadius:8,padding:"10px 20px",fontSize:14,fontWeight:600,cursor:"pointer"},
+          },"Log")
+        ),
+        measurements.length>0&&h("div",{style:{marginTop:12,display:"flex",flexDirection:"column",gap:6}},
+          measurements.slice(0,5).map(m=>
+            h("div",{key:m.id,style:{display:"flex",justifyContent:"space-between",fontSize:13,color:D.muted}},
+              h("span",null,m.measured_at),
+              h("span",{style:{color:D.text,fontWeight:500}},m.weight_kg+" kg")
+            )
+          )
+        )
+      ),
+
+      // Chat card
+      h("div",{style:{...card,display:"flex",flexDirection:"column",gap:0}},
+        h("div",{style:{fontWeight:600,fontSize:15,marginBottom:12}},"AI Coach"),
+
+        // Messages
+        h("div",{style:{display:"flex",flexDirection:"column",gap:10,marginBottom:14,maxHeight:420,overflowY:"auto"}},
+          coachMsgs.map((m,i)=>{
+            const isUser = m.role==="user";
+            const isTool = m.role==="tool";
+            const isErr  = m.role==="error";
+            return h("div",{key:i,style:{
+              alignSelf: isUser?"flex-end":"flex-start",
+              maxWidth:"85%",
+              background: isUser?D.accent:isTool?"#0d2a0d":isErr?"#2a0d0d":D.bg,
+              color: isErr?"#f08080":isTool?"#6ec97e":D.text,
+              borderRadius:12,
+              padding:"9px 13px",
+              fontSize:13,
+              lineHeight:1.6,
+              whiteSpace:"pre-wrap",
+              border: isUser?"none":`0.5px solid ${D.border}`,
+            }},m.text);
+          }),
+          coachBusy&&h("div",{style:{alignSelf:"flex-start",background:D.bg,border:`0.5px solid ${D.border}`,borderRadius:12,padding:"9px 13px",fontSize:13,color:D.muted}},
+            h(Spinner,{size:14})
+          )
+        ),
+
+        // Input row
+        h("div",{style:{display:"flex",gap:8}},
+          h("input",{
+            type:"text",
+            placeholder:"Ask about nutrition, log a meal, set goals…",
+            value:coachInput,
+            onChange:e=>setCoachInput(e.target.value),
+            onKeyDown:e=>{if(e.key==="Enter"&&!e.shiftKey&&coachInput.trim()&&!coachBusy){ e.preventDefault(); sendCoachMessage(coachInput.trim()); }},
+            disabled:coachBusy,
+            style:fieldStyle({flex:1,fontSize:13}),
+          }),
+          h("button",{
+            onClick:()=>{ if(coachInput.trim()&&!coachBusy) sendCoachMessage(coachInput.trim()); },
+            disabled:coachBusy,
+            style:{background:D.accent,color:D.accentText,border:"none",borderRadius:8,padding:"10px 16px",fontSize:13,fontWeight:600,cursor:"pointer",opacity:coachBusy?0.5:1},
+          },"Send")
+        )
+      )
+    ),
 
     // Day Detail Modal
     detailDate&&h(DayDetailModal,{
