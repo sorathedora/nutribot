@@ -55,6 +55,27 @@ ACTIVITIES_API  = f"{SUPABASE_URL}/rest/v1/activities"
 # );
 # ALTER TABLE daily_steps ENABLE ROW LEVEL SECURITY;
 # CREATE POLICY "anon_all" ON daily_steps FOR ALL TO anon USING (true) WITH CHECK (true);
+#
+# -- NEW: Body Goals (calisthenics tracking, logged from the dashboard only —
+# -- no bot commands for this feature)
+# CREATE TABLE body_sets (
+#   id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+#   set_date date NOT NULL,
+#   exercise text NOT NULL,
+#   value integer NOT NULL,
+#   logged_at timestamptz DEFAULT now()
+# );
+# ALTER TABLE body_sets ENABLE ROW LEVEL SECURITY;
+# CREATE POLICY "anon_all" ON body_sets FOR ALL TO anon USING (true) WITH CHECK (true);
+#
+# INSERT INTO settings (key, value) VALUES
+#   ('body_freeze_balance', '0'),
+#   ('body_streak_milestone_credited', '0'),
+#   ('body_block_index', '0'),
+#   ('body_block_entered_at', to_char(now(), 'YYYY-MM-DD')),
+#   ('pullup_stage_index', '0'),
+#   ('pullup_stage_entered_at', to_char(now(), 'YYYY-MM-DD'))
+# ON CONFLICT (key) DO NOTHING;
 # ─────────────────────────────────────────────────────────────
 
 HEADERS  = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"}

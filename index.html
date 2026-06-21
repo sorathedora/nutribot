@@ -12,6 +12,13 @@ button{font-family:'DM Sans',sans-serif;cursor:pointer}
 @keyframes spin{to{transform:rotate(360deg)}}
 @keyframes fadeIn{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
 .fade{animation:fadeIn 0.2s ease}
+/* Body Goals — shared figure animation keyframes */
+@keyframes bodyBob{0%,100%{transform:translateY(0)}50%{transform:translateY(var(--amp,8px))}}
+@keyframes bodyRotate{0%,100%{transform:rotate(0deg)}50%{transform:rotate(var(--amp,-55deg))}}
+@keyframes bodyBreathe{0%,100%{transform:scaleY(1)}50%{transform:scaleY(var(--amp,1.04))}}
+@keyframes bodySway{0%,100%{transform:rotate(-2deg)}50%{transform:rotate(2deg)}}
+@keyframes bodyLower{0%,12%{transform:translateY(0)}82%,100%{transform:translateY(var(--amp,36px))}}
+.bg-anim{transform-box:fill-box;animation-timing-function:ease-in-out;animation-iteration-count:infinite}
 ::-webkit-scrollbar{width:4px}
 ::-webkit-scrollbar-track{background:#0f0f0d}
 ::-webkit-scrollbar-thumb{background:#2a2a26;border-radius:4px}
@@ -45,6 +52,7 @@ const COLORS = {
   act:"#a78bfa", actBg:"#1a1030",
 };
 const STEP_TARGET = 5000;
+const WEIGHT_KG = 74;
 const ACTIVITY_ICONS = {
   walk:"🚶", jog:"🏃", run:"🏃", badminton:"🏸", basketball:"🏀",
   swimming:"🏊", cycling:"🚴", yoga:"🧘", gym:"🏋️",
@@ -53,6 +61,287 @@ const ACTIVITY_ICONS = {
   boxing:"🥊", skipping:"🏃", stair:"🪜", pilates:"🤸", crossfit:"💪",
 };
 function actIcon(name){ return ACTIVITY_ICONS[name] || "🏃"; }
+// MET values — mirrors bot.py's METS dict (2011 Compendium of Physical Activities)
+const METS = {
+  walk:      {light:2.8, moderate:3.5, vigorous:5.0},
+  jog:       {light:6.0, moderate:7.0, vigorous:9.0},
+  run:       {light:8.3, moderate:9.8, vigorous:12.8},
+  badminton: {light:4.5, moderate:5.5, vigorous:7.0},
+  basketball:{light:4.5, moderate:6.5, vigorous:8.0},
+  swimming:  {light:5.0, moderate:5.8, vigorous:9.8},
+  cycling:   {light:4.0, moderate:6.8, vigorous:10.0},
+  yoga:      {light:2.0, moderate:2.5, vigorous:4.0},
+  gym:       {light:3.5, moderate:5.0, vigorous:6.0},
+  football:  {light:5.0, moderate:7.0, vigorous:10.0},
+  cricket:   {light:3.5, moderate:4.8, vigorous:6.0},
+  dancing:   {light:3.0, moderate:5.0, vigorous:7.8},
+  hiking:    {light:4.0, moderate:5.3, vigorous:7.0},
+  sex:       {light:1.8, moderate:3.0, vigorous:5.8},
+  tennis:    {light:5.0, moderate:7.3, vigorous:8.0},
+  squash:    {light:7.3, moderate:9.0, vigorous:12.1},
+  volleyball:{light:3.0, moderate:4.0, vigorous:8.0},
+  boxing:    {light:6.0, moderate:9.0, vigorous:12.8},
+  skipping:  {light:8.8, moderate:10.0,vigorous:12.3},
+  stair:     {light:4.0, moderate:6.0, vigorous:8.8},
+  pilates:   {light:2.5, moderate:3.0, vigorous:4.0},
+  crossfit:  {light:5.0, moderate:8.0, vigorous:14.0},
+};
+const ACTIVITY_LIST = Object.keys(METS);
+function calcActivityCalories(activity, durationMin, intensity){
+  const met = (METS[activity]||{})[intensity];
+  if(!met) return 0;
+  return Math.round(met * WEIGHT_KG * durationMin / 60);
+}
+
+// ── Body Goals: exercise catalog, week blocks, pull-up stages ───
+const BODY_GROUP_COLORS = {
+  chest:  {c:"#7ab8f5", dark:"#3a6a96"},
+  tri:    {c:"#e8a84a", dark:"#9a6b1f"},
+  shoulder:{c:"#8ec94a", dark:"#4f7a26"},
+  abs:    {c:"#d97aaa", dark:"#8a4468"},
+  biceps: {c:"#4ac9b0", dark:"#236b5c"},
+};
+const BODY_EXERCISES = {
+  wide_pushup:    {label:"Wide grip pushup",      unit:"reps", group:"chest",   icon:"💪", chips:[5,10,15]},
+  narrow_pushup:  {label:"Narrow/diamond pushup", unit:"reps", group:"tri",     icon:"💎", chips:[4,5,8]},
+  pike_pushup:    {label:"Pike pushup",            unit:"reps", group:"shoulder",icon:"⛰️", chips:[5,10]},
+  decline_pushup: {label:"Decline pushup",         unit:"reps", group:"shoulder",icon:"📐", chips:[5,10]},
+  archer_pushup:  {label:"Archer pushup",          unit:"reps", group:"chest",   icon:"🏹", chips:[5,10]},
+  negative_pullup:{label:"Negative pull-up",       unit:"reps", group:"biceps", icon:"⬇️", chips:[1,5]},
+  full_pullup:    {label:"Full pull-up",           unit:"reps", group:"biceps", icon:"🆙", chips:[1,3]},
+  dead_hang:      {label:"Dead hang",              unit:"sec",  group:"biceps", icon:"🪢", chips:[10,20,30]},
+  plank:          {label:"Plank hold",             unit:"sec",  group:"abs",    icon:"🪵", chips:[20,40,60]},
+  leg_raise:      {label:"Leg raise",              unit:"reps", group:"abs",    icon:"🦵", chips:[10,15]},
+  hollow_body:    {label:"Hollow body hold",       unit:"sec",  group:"abs",    icon:"🌙", chips:[15,25,45]},
+};
+const BODY_GROUP_LABELS = {chest:"Chest + Triceps", shoulder:"Shoulders", biceps:"Biceps + Back", abs:"Abs + Core"};
+const BODY_GROUP_ORDER = ["chest","shoulder","biceps","abs"];
+
+const WEEK_BLOCKS = [
+  {label:"Weeks 1–2", tag:"Foundation", minDays:14,
+    targets:{wide_pushup:50,narrow_pushup:30,pike_pushup:30,decline_pushup:20,archer_pushup:0,negative_pullup:10,full_pullup:0,dead_hang:60,plank:120,leg_raise:30,hollow_body:45}},
+  {label:"Weeks 3–4", tag:"+10% volume", minDays:14,
+    targets:{wide_pushup:60,narrow_pushup:40,pike_pushup:25,decline_pushup:25,archer_pushup:0,negative_pullup:15,full_pullup:0,dead_hang:60,plank:180,leg_raise:40,hollow_body:45}},
+  {label:"Weeks 5–8", tag:"Compound", minDays:28,
+    targets:{wide_pushup:80,narrow_pushup:40,pike_pushup:25,decline_pushup:25,archer_pushup:20,negative_pullup:0,full_pullup:10,dead_hang:60,plank:240,leg_raise:50,hollow_body:45}},
+];
+const PULLUP_STAGES = [
+  {label:"Negatives only",       desc:"Jump/step to chin-over-bar, lower 5 sec.",   target:"10 negatives/day · weeks 1–3"},
+  {label:"Assisted + negatives", desc:"One foot lightly assists the pull.",          target:"8 assisted + 5 negatives · weeks 3–5"},
+  {label:"First clean pull-up",  desc:"Dead hang → scapula retracted → chin clears bar.", target:"1→3 clean reps · weeks 5–7"},
+  {label:"Build to 10",          desc:"+1 rep/week, grease the groove again.",       target:"5–10 clean reps · month 2–3"},
+];
+const DAILY_SCHEDULE = [
+  {time:"Morning · wake up",   title:"Rise set",    items:["10 wide pushups","Dead hang 20 sec","Plank 40 sec"]},
+  {time:"Midday · work break", title:"Arm set",     items:["8 narrow pushups","5 negative pullups","10 leg raises"]},
+  {time:"Pre-dinner",          title:"Shoulder set",items:["10 pike pushups","10 decline pushups","Hollow body 25 sec"]},
+  {time:"Night · before bed",  title:"Finish set",  items:["15 wide pushups","5 negative pullups","10 leg raises","Dead hang 20 sec","Plank 40 sec"]},
+];
+const BODY_GOOD_DAY_PCT = 0.75;   // day counts as "good" at >=75% average completion
+const BODY_ADVANCE_PCT  = 0.80;   // day counts toward block-advancement at >=80%
+const BODY_ADVANCE_DAYS = 5;      // need >=5 such days in the trailing 7 to advance a block
+const BODY_FREEZE_EVERY = 6;
+const BODY_FREEZE_MAX   = 2;
+
+// ── Body Goals: lightweight pseudo-3D figure renderer ───────────
+function capsulePath(x1,y1,x2,y2,r){
+  const dx=x2-x1, dy=y2-y1, len=Math.hypot(dx,dy)||1;
+  const ux=dx/len, uy=dy/len, px=-uy, py=ux;
+  const ax=x1+px*r, ay=y1+py*r, bx=x2+px*r, by=y2+py*r;
+  const cx2=x2-px*r, cy2=y2-py*r, dx2=x1-px*r, dy2=y1-py*r;
+  return `M${ax} ${ay} L${bx} ${by} A${r} ${r} 0 0 1 ${cx2} ${cy2} L${dx2} ${dy2} A${r} ${r} 0 0 1 ${ax} ${ay} Z`;
+}
+function BodyFigureDefs(){
+  // One shared, globally-referenced set of gradients — keeps every per-exercise
+  // SVG lightweight (no per-card defs duplication) while giving capsules a
+  // subtle cylindrical / 3D shaded look.
+  const grads = Object.entries(BODY_GROUP_COLORS).map(([key,{c,dark}])=>
+    h("linearGradient",{key,id:`bg-${key}`,x1:"0",y1:"0",x2:"1",y2:"1"},
+      h("stop",{offset:"0%",stopColor:c}),
+      h("stop",{offset:"100%",stopColor:dark})
+    )
+  );
+  return h("svg",{width:0,height:0,style:{position:"absolute"}},
+    h("defs",null,
+      ...grads,
+      h("linearGradient",{id:"bg-neutral",x1:"0",y1:"0",x2:"1",y2:"1"},
+        h("stop",{offset:"0%",stopColor:"#f0efe8"}),h("stop",{offset:"100%",stopColor:"#8a8a82"})),
+      h("radialGradient",{id:"bg-head",cx:"35%",cy:"30%",r:"75%"},
+        h("stop",{offset:"0%",stopColor:"#fbfaf5"}),h("stop",{offset:"100%",stopColor:"#9a9a90"}))
+    )
+  );
+}
+function Limb({x1,y1,x2,y2,r=5,group="chest"}){
+  return h("path",{d:capsulePath(x1,y1,x2,y2,r),fill:`url(#bg-${group})`,opacity:0.95});
+}
+function NeutralLimb({x1,y1,x2,y2,r=6}){
+  return h("path",{d:capsulePath(x1,y1,x2,y2,r),fill:"url(#bg-neutral)"});
+}
+function BodyJoint({x,y,r=3.5,group="chest"}){
+  return h("circle",{cx:x,cy:y,r,fill:BODY_GROUP_COLORS[group]?.c||"#f0efe8"});
+}
+function BodyHead({x,y,r=10}){
+  return h("circle",{cx:x,cy:y,r,fill:"url(#bg-head)",stroke:"#00000030",strokeWidth:1});
+}
+function GroundShadow({cx,cy,rx=34,ry=5}){
+  return h("ellipse",{cx,cy,rx,ry,fill:"#000",opacity:0.25});
+}
+function Sparkline({series, target, color, height=26}){
+  const w=300, n=series.length;
+  if(!n) return null;
+  const maxV = Math.max(target||0, ...series, 1);
+  const yOf = v => height - Math.min(v/maxV,1)*height;
+  const pts = series.map((v,i)=> `${n>1?(i/(n-1))*w:w/2},${yOf(v)}`).join(" ");
+  const targetY = target>0 ? yOf(target) : null;
+  const lastX = n>1?w:w/2, lastY = yOf(series[n-1]);
+  return h("svg",{viewBox:`0 0 ${w} ${height}`,width:"100%",height,preserveAspectRatio:"none",style:{display:"block",overflow:"visible"}},
+    targetY!=null && h("line",{x1:0,y1:targetY,x2:w,y2:targetY,stroke:D.border,strokeWidth:1,strokeDasharray:"3,3"}),
+    h("polyline",{points:pts,fill:"none",stroke:color,strokeWidth:1.8,strokeLinejoin:"round",strokeLinecap:"round"}),
+    h("circle",{cx:lastX,cy:lastY,r:2.3,fill:color})
+  );
+}
+function FigureFrame({h:vbh=120, caption, children}){
+  return h("svg",{viewBox:`0 0 120 ${vbh}`,width:"100%",height:"100%",style:{display:"block",overflow:"hidden"}},
+    children,
+    caption&&h("text",{x:60,y:vbh-6,textAnchor:"middle",fontSize:7.5,fill:"#666660",fontFamily:"'DM Sans',sans-serif"},caption)
+  );
+}
+function AnimGroup({anim, origin, amp, dur=2, children}){
+  return h("g",{className:"bg-anim",style:{animationName:`body${anim}`,animationDuration:`${dur}s`,transformOrigin:origin,"--amp":amp}},children);
+}
+
+// Each renderer returns the full figure for one exercise — side-view capsule
+// figures with shared gradients (pseudo-3D) and one CSS-driven moving group.
+const BODY_POSE_RENDERERS = {
+  wide_pushup: () => h(FigureFrame,{caption:"wide grip"},
+    h("line",{x1:5,y1:98,x2:115,y2:98,stroke:"#2a2a26",strokeWidth:1}),
+    h(GroundShadow,{cx:55,cy:98}),
+    h(NeutralLimb,{x1:28,y1:76,x2:16,y2:90,r:6}), h(NeutralLimb,{x1:16,y1:90,x2:8,y2:96,r:4.5}),
+    h(AnimGroup,{anim:"Bob",origin:"30px 76px",amp:"9px",dur:1.6},
+      h(NeutralLimb,{x1:28,y1:76,x2:78,y2:68,r:8}),
+      h(BodyHead,{x:90,y:65,r:10}),
+      h(Limb,{x1:70,y1:69,x2:88,y2:90,r:5,group:"chest"}),
+      h(BodyJoint,{x:88,y:91,group:"chest"})
+    )
+  ),
+  narrow_pushup: () => h(FigureFrame,{caption:"narrow grip"},
+    h("line",{x1:5,y1:98,x2:115,y2:98,stroke:"#2a2a26",strokeWidth:1}),
+    h(GroundShadow,{cx:55,cy:98}),
+    h(NeutralLimb,{x1:28,y1:76,x2:16,y2:90,r:6}), h(NeutralLimb,{x1:16,y1:90,x2:8,y2:96,r:4.5}),
+    h(AnimGroup,{anim:"Bob",origin:"30px 76px",amp:"9px",dur:1.8},
+      h(NeutralLimb,{x1:28,y1:76,x2:78,y2:68,r:8}),
+      h(BodyHead,{x:90,y:65,r:10}),
+      h(Limb,{x1:64,y1:69,x2:68,y2:90,r:4.5,group:"tri"}),
+      h(BodyJoint,{x:68,y:91,group:"tri"})
+    )
+  ),
+  pike_pushup: () => h(FigureFrame,{caption:"hips high"},
+    h("line",{x1:5,y1:100,x2:115,y2:100,stroke:"#2a2a26",strokeWidth:1}),
+    h(GroundShadow,{cx:55,cy:100}),
+    h(NeutralLimb,{x1:60,y1:50,x2:38,y2:92,r:5.5}), h(NeutralLimb,{x1:38,y1:92,x2:30,y2:99,r:4}),
+    h(AnimGroup,{anim:"Bob",origin:"60px 50px",amp:"13px",dur:2},
+      h(BodyJoint,{x:60,y:50,r:4,group:"shoulder"}),
+      h(Limb,{x1:60,y1:50,x2:82,y2:66,r:7,group:"shoulder"}),
+      h(BodyHead,{x:90,y:74,r:9}),
+      h(Limb,{x1:75,y1:64,x2:67,y2:89,r:5,group:"shoulder"}),
+      h(BodyJoint,{x:67,y:90,group:"shoulder"})
+    )
+  ),
+  decline_pushup: () => h(FigureFrame,{caption:"feet elevated"},
+    h("rect",{x:5,y:72,width:26,height:20,rx:3,fill:"#232320",stroke:"#2a2a26",strokeWidth:0.5}),
+    h("line",{x1:34,y1:92,x2:115,y2:92,stroke:"#2a2a26",strokeWidth:1}),
+    h(GroundShadow,{cx:80,cy:92}),
+    h(NeutralLimb,{x1:20,y1:72,x2:16,y2:72,r:4}),
+    h(AnimGroup,{anim:"Bob",origin:"20px 72px",amp:"8px",dur:1.7},
+      h(NeutralLimb,{x1:20,y1:72,x2:85,y2:50,r:7}),
+      h(BodyHead,{x:93,y:46,r:9}),
+      h(Limb,{x1:78,y1:53,x2:88,y2:74,r:5,group:"shoulder"}),
+      h(BodyJoint,{x:88,y:75,group:"shoulder"})
+    )
+  ),
+  archer_pushup: () => h(FigureFrame,{caption:"bent + straight arm"},
+    h("line",{x1:5,y1:98,x2:115,y2:98,stroke:"#2a2a26",strokeWidth:1}),
+    h(GroundShadow,{cx:55,cy:98}),
+    h(NeutralLimb,{x1:28,y1:76,x2:16,y2:90,r:6}), h(NeutralLimb,{x1:16,y1:90,x2:8,y2:96,r:4.5}),
+    h(AnimGroup,{anim:"Bob",origin:"30px 76px",amp:"9px",dur:1.7},
+      h(NeutralLimb,{x1:28,y1:76,x2:78,y2:68,r:8}),
+      h(BodyHead,{x:90,y:65,r:10}),
+      h(Limb,{x1:70,y1:69,x2:86,y2:90,r:5,group:"chest"}),       // bent working arm
+      h(Limb,{x1:55,y1:71,x2:30,y2:78,r:4,group:"tri"}),         // straight extended arm
+      h(BodyJoint,{x:86,y:91,group:"chest"}), h(BodyJoint,{x:30,y:78,group:"tri"})
+    )
+  ),
+  negative_pullup: () => h(FigureFrame,{h:130,caption:"lower slow, 5 sec"},
+    h("rect",{x:10,y:14,width:100,height:7,rx:3.5,fill:"#4ac9b0"}),
+    h(AnimGroup,{anim:"Lower",origin:"60px 19px",amp:"36px",dur:3},
+      h(BodyJoint,{x:35,y:19,group:"biceps"}), h(BodyJoint,{x:85,y:19,group:"biceps"}),
+      h(Limb,{x1:35,y1:21,x2:42,y2:42,r:4,group:"biceps"}), h(Limb,{x1:85,y1:21,x2:78,y2:42,r:4,group:"biceps"}),
+      h(NeutralLimb,{x1:42,y1:42,x2:78,y2:42,r:7}),
+      h(BodyHead,{x:60,y:33,r:9}),
+      h(NeutralLimb,{x1:52,y1:42,x2:48,y2:72,r:5}), h(NeutralLimb,{x1:68,y1:42,x2:72,y2:72,r:5}),
+      h(NeutralLimb,{x1:48,y1:72,x2:44,y2:88,r:4.5}), h(NeutralLimb,{x1:72,y1:72,x2:76,y2:88,r:4.5})
+    )
+  ),
+  full_pullup: () => h(FigureFrame,{h:130,caption:"chin over bar"},
+    h("rect",{x:10,y:14,width:100,height:7,rx:3.5,fill:"#4ac9b0"}),
+    h(AnimGroup,{anim:"Bob",origin:"60px 50px",amp:"-26px",dur:1.8},
+      h(BodyJoint,{x:35,y:19,group:"biceps"}), h(BodyJoint,{x:85,y:19,group:"biceps"}),
+      h(Limb,{x1:35,y1:21,x2:44,y2:50,r:4,group:"biceps"}), h(Limb,{x1:85,y1:21,x2:76,y2:50,r:4,group:"biceps"}),
+      h(NeutralLimb,{x1:44,y1:50,x2:76,y2:50,r:7}),
+      h(BodyHead,{x:60,y:42,r:9}),
+      h(NeutralLimb,{x1:54,y1:50,x2:50,y2:80,r:5}), h(NeutralLimb,{x1:66,y1:50,x2:70,y2:80,r:5}),
+      h(NeutralLimb,{x1:50,y1:80,x2:46,y2:96,r:4.5}), h(NeutralLimb,{x1:70,y1:80,x2:74,y2:96,r:4.5})
+    )
+  ),
+  dead_hang: () => h(FigureFrame,{h:130,caption:"passive hang"},
+    h("rect",{x:10,y:14,width:100,height:7,rx:3.5,fill:"#4ac9b0"}),
+    h(AnimGroup,{anim:"Sway",origin:"60px 18px",amp:"",dur:3},
+      h(BodyJoint,{x:35,y:18,group:"biceps"}), h(BodyJoint,{x:85,y:18,group:"biceps"}),
+      h(Limb,{x1:35,y1:22,x2:46,y2:44,r:4,group:"biceps"}), h(Limb,{x1:85,y1:22,x2:74,y2:44,r:4,group:"biceps"}),
+      h(NeutralLimb,{x1:46,y1:44,x2:74,y2:44,r:7}),
+      h(BodyHead,{x:60,y:35,r:9}),
+      h(NeutralLimb,{x1:53,y1:44,x2:50,y2:78,r:5}), h(NeutralLimb,{x1:67,y1:44,x2:70,y2:78,r:5}),
+      h(NeutralLimb,{x1:50,y1:78,x2:47,y2:96,r:4.5}), h(NeutralLimb,{x1:70,y1:78,x2:73,y2:96,r:4.5})
+    )
+  ),
+  plank: () => h(FigureFrame,{caption:"forearms flat"},
+    h("line",{x1:5,y1:97,x2:115,y2:97,stroke:"#2a2a26",strokeWidth:1}),
+    h(GroundShadow,{cx:55,cy:97}),
+    h(AnimGroup,{anim:"Breathe",origin:"55px 80px",amp:"1.04",dur:2.5},
+      h(NeutralLimb,{x1:20,y1:72,x2:80,y2:72,r:7}),
+      h(BodyHead,{x:90,y:72,r:9}),
+      h(Limb,{x1:32,y1:72,x2:32,y2:88,r:4,group:"abs"}), h(Limb,{x1:60,y1:72,x2:60,y2:88,r:4,group:"abs"}),
+      h(Limb,{x1:22,y1:88,x2:42,y2:88,r:4,group:"abs"}), h(Limb,{x1:50,y1:88,x2:70,y2:88,r:4,group:"abs"}),
+      h(NeutralLimb,{x1:20,y1:72,x2:14,y2:88,r:4.5}), h(NeutralLimb,{x1:18,y1:88,x2:10,y2:88,r:3.5})
+    )
+  ),
+  leg_raise: () => h(FigureFrame,{caption:"slow up, slow down"},
+    h("line",{x1:5,y1:95,x2:115,y2:95,stroke:"#2a2a26",strokeWidth:1}),
+    h(GroundShadow,{cx:55,cy:95}),
+    h(NeutralLimb,{x1:70,y1:80,x2:90,y2:80,r:6}),
+    h(BodyHead,{x:100,y:80,r:9}),
+    h(NeutralLimb,{x1:70,y1:80,x2:80,y2:90,r:3.5}), h(NeutralLimb,{x1:55,y1:80,x2:65,y2:90,r:3.5}),
+    h(AnimGroup,{anim:"Rotate",origin:"70px 80px",amp:"-58deg",dur:2},
+      h(Limb,{x1:70,y1:80,x2:40,y2:80,r:6,group:"abs"}),
+      h(Limb,{x1:40,y1:80,x2:18,y2:80,r:5,group:"abs"}),
+      h(BodyJoint,{x:14,y:80,group:"abs"})
+    )
+  ),
+  hollow_body: () => h(FigureFrame,{caption:"back flat, lifted"},
+    h("line",{x1:5,y1:98,x2:115,y2:98,stroke:"#2a2a26",strokeWidth:1}),
+    h(GroundShadow,{cx:60,cy:98}),
+    h(AnimGroup,{anim:"Bob",origin:"60px 75px",amp:"-3px",dur:2.5},
+      h("path",{d:"M22,82 Q60,66 98,80",fill:"none",stroke:"url(#bg-abs)",strokeWidth:5,strokeLinecap:"round"}),
+      h(BodyHead,{x:105,y:77,r:8}),
+      h(Limb,{x1:100,y1:78,x2:112,y2:68,r:3.5,group:"abs"}),
+      h(Limb,{x1:22,y1:82,x2:8,y2:78,r:3.5,group:"abs"})
+    )
+  ),
+};
+function BodyExerciseFigure({exercise}){
+  const renderer = BODY_POSE_RENDERERS[exercise];
+  return renderer ? renderer() : null;
+}
 
 // ── time helpers ───────────────────────────────────────────────
 function todayStr(){
@@ -88,6 +377,21 @@ async function apiFetchCheatDays(){
     return new Set((await r.json()).map(x=>x.date));
   } catch{ return new Set(); }
 }
+async function apiFetchActCheatDays(){
+  try{
+    const r = await fetch(`${URL_BASE}/act_cheat_days?order=date.desc`,{headers:HDRS});
+    if(!r.ok) return new Set();
+    return new Set((await r.json()).map(x=>x.date));
+  } catch{ return new Set(); }
+}
+async function apiAddActCheatDay(date){
+  const r = await fetch(`${URL_BASE}/act_cheat_days`,{method:"POST",headers:{...HDRS,"Prefer":"return=minimal"},body:JSON.stringify({date})});
+  if(!r.ok) throw new Error(r.status+" "+await r.text());
+}
+async function apiRemoveActCheatDay(date){
+  const r = await fetch(`${URL_BASE}/act_cheat_days?date=eq.${date}`,{method:"DELETE",headers:{...HDRS,"Prefer":"return=minimal"}});
+  if(!r.ok) throw new Error(r.status+" "+await r.text());
+}
 async function apiFetchSettings(){
   try{
     const r = await fetch(`${URL_BASE}/settings`,{headers:HDRS});
@@ -104,6 +408,25 @@ async function apiFetchSteps(from, to){
     return Object.fromEntries(rows.map(x=>[x.step_date, x.steps]));
   } catch{ return {}; }
 }
+async function apiFetchBodySets(from, to){
+  try{
+    const r = await fetch(`${URL_BASE}/body_sets?set_date=gte.${from}&set_date=lte.${to}&order=logged_at.asc`,{headers:HDRS});
+    if(!r.ok) return [];
+    return r.json();
+  } catch{ return []; }
+}
+async function apiInsertBodySet(date, exercise, value){
+  const r = await fetch(`${URL_BASE}/body_sets`,{method:"POST",headers:{...HDRS,"Prefer":"return=representation"},
+    body:JSON.stringify({set_date:date, exercise, value})});
+  if(!r.ok) throw new Error(r.status+" "+await r.text());
+  return r.json();
+}
+async function apiUpsertSetting(key, value){
+  try{
+    await fetch(`${URL_BASE}/settings`,{method:"POST",headers:{...HDRS,"Prefer":"resolution=merge-duplicates"},
+      body:JSON.stringify({key, value:String(value)})});
+  } catch{}
+}
 async function apiInsert(meal){
   const r = await fetch(`${URL_BASE}/meals`,{method:"POST",headers:{...HDRS,"Prefer":"return=representation"},body:JSON.stringify(meal)});
   if(!r.ok) throw new Error(r.status+" "+await r.text());
@@ -112,6 +435,59 @@ async function apiInsert(meal){
 async function apiDeleteToday(){
   const r = await fetch(`${URL_BASE}/meals?meal_date=eq.${todayStr()}`,{method:"DELETE",headers:{...HDRS,"Prefer":"return=minimal"}});
   if(!r.ok) throw new Error(r.status+" "+await r.text());
+}
+// ── Log tab — write functions (mirrors bot.py /edit /delete /undo /save /presets /unsave /log /copy /cheatday /workout /delworkout) ──
+async function apiUpdateMeal(id, updates){
+  const r = await fetch(`${URL_BASE}/meals?id=eq.${id}`,{method:"PATCH",headers:{...HDRS,"Prefer":"return=minimal"},body:JSON.stringify(updates)});
+  if(!r.ok) throw new Error(r.status+" "+await r.text());
+}
+async function apiDeleteMealById(id){
+  const r = await fetch(`${URL_BASE}/meals?id=eq.${id}`,{method:"DELETE",headers:{...HDRS,"Prefer":"return=minimal"}});
+  if(!r.ok) throw new Error(r.status+" "+await r.text());
+}
+async function apiInsertActivity(act){
+  const r = await fetch(`${URL_BASE}/activities`,{method:"POST",headers:{...HDRS,"Prefer":"return=representation"},body:JSON.stringify(act)});
+  if(!r.ok) throw new Error(r.status+" "+await r.text());
+  return r.json();
+}
+async function apiDeleteActivityById(id){
+  const r = await fetch(`${URL_BASE}/activities?id=eq.${id}`,{method:"DELETE",headers:{...HDRS,"Prefer":"return=minimal"}});
+  if(!r.ok) throw new Error(r.status+" "+await r.text());
+}
+function titleCase(s){ return s.replace(/\b\w/g, c=>c.toUpperCase()); }
+async function apiSavePreset(name, macros){
+  const r = await fetch(`${URL_BASE}/presets`,{method:"POST",headers:{...HDRS,"Prefer":"resolution=merge-duplicates,return=representation"},
+    body:JSON.stringify({name:name.toLowerCase(), ...macros})});
+  if(!r.ok) throw new Error(r.status+" "+await r.text());
+  return r.json();
+}
+async function apiListPresets(){
+  try{
+    const r = await fetch(`${URL_BASE}/presets?order=name.asc`,{headers:HDRS});
+    if(!r.ok) return [];
+    return r.json();
+  } catch{ return []; }
+}
+async function apiDeletePreset(name){
+  const r = await fetch(`${URL_BASE}/presets?name=eq.${name.toLowerCase()}`,{method:"DELETE",headers:{...HDRS,"Prefer":"return=minimal"}});
+  if(!r.ok) throw new Error(r.status+" "+await r.text());
+}
+async function apiAddCheatDay(date){
+  const r = await fetch(`${URL_BASE}/cheat_days`,{method:"POST",headers:{...HDRS,"Prefer":"return=minimal"},body:JSON.stringify({date})});
+  if(!r.ok) throw new Error(r.status+" "+await r.text());
+}
+async function apiRemoveCheatDay(date){
+  const r = await fetch(`${URL_BASE}/cheat_days?date=eq.${date}`,{method:"DELETE",headers:{...HDRS,"Prefer":"return=minimal"}});
+  if(!r.ok) throw new Error(r.status+" "+await r.text());
+}
+async function apiCopyPreviousDay(targetDate){
+  const p = new Date(targetDate+"T12:00:00"); p.setDate(p.getDate()-1);
+  const prevStr = p.toISOString().split("T")[0];
+  const meals = await apiFetch(prevStr, prevStr);
+  for(const m of meals){
+    await apiInsert({meal_date:targetDate, meal_time:m.meal_time, name:m.name, cal:m.cal, protein:m.protein, carbs:m.carbs, fat:m.fat, fiber:m.fiber||0});
+  }
+  return meals.length;
 }
 
 window.logMeal = async(name,cal,protein,carbs,fat,fiber=0,timeStr=null)=>{
@@ -182,6 +558,37 @@ function MealRow({meal}){
   );
 }
 
+function BodyExerciseCard({exKey, ex, value, target, onAdd}){
+  const [custom, setCustom] = useState("");
+  const locked = target<=0;
+  const pct = target>0 ? Math.min((value/target)*100,100) : 0;
+  const unitLabel = ex.unit==="sec" ? "sec" : "reps";
+  const grpColor = (BODY_GROUP_COLORS[ex.group]||{}).c || D.accent;
+  return h("div",{style:{background:D.surface,border:`0.5px solid ${D.border}`,borderRadius:12,padding:"0.7rem 0.85rem",marginBottom:8,opacity:locked?0.5:1}},
+    h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:locked?0:8}},
+      h("div",{style:{display:"flex",alignItems:"center",gap:8}},
+        h("span",{style:{fontSize:17}},ex.icon),
+        h("span",{style:{fontSize:13,fontWeight:500,color:D.text}},ex.label)
+      ),
+      locked
+        ? h("span",{style:{fontSize:10,color:D.muted}},"🔒 locked")
+        : h("span",{style:{fontSize:12,color:grpColor,fontWeight:600}},`${value} / ${target} ${unitLabel}`)
+    ),
+    !locked&&h("div",{style:{height:5,background:D.hint,borderRadius:3,overflow:"hidden",marginBottom:9}},
+      h("div",{style:{width:`${pct}%`,height:"100%",background:grpColor,borderRadius:3,transition:"width 0.4s ease"}})
+    ),
+    !locked&&h("div",{style:{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}},
+      ...ex.chips.map(n=>h("button",{key:n,onClick:()=>onAdd(n),style:{
+        fontSize:11,padding:"4px 11px",borderRadius:8,border:`0.5px solid ${D.border}`,background:D.card,color:D.text,fontWeight:500
+      }},`+${n}${ex.unit==="sec"?"s":""}`)),
+      h("input",{type:"number",value:custom,onChange:e=>setCustom(e.target.value),placeholder:"#",
+        style:{width:44,background:D.card,border:`0.5px solid ${D.border}`,color:D.text,borderRadius:8,padding:"4px 7px",fontSize:11,fontFamily:"inherit"}}),
+      h("button",{onClick:()=>{ const v=parseInt(custom); if(v>0){onAdd(v); setCustom("");} },
+        style:{fontSize:11,padding:"4px 11px",borderRadius:8,border:"none",background:D.accent,color:D.accentText,fontWeight:600}},"Add")
+    )
+  );
+}
+
 function ActivityRow({act}){
   const valid = (act.calories_burned||0) >= ACT_MIN;
   return h("div",{style:{borderBottom:`0.5px solid ${D.border}`,padding:"11px 0"}},
@@ -214,11 +621,12 @@ function Spinner(){
 
 function TabPill({label,active,onClick}){
   return h("button",{onClick,style:{
-    fontSize:12,padding:"6px 17px",borderRadius:20,
+    fontSize:"clamp(10px,2.6vw,12px)",padding:"7px 4px",borderRadius:16,
     border:`0.5px solid ${active?D.accent:D.border}`,
     background:active?D.accent:"transparent",
     color:active?D.accentText:D.muted,
-    fontWeight:active?600:400,transition:"all 0.15s"
+    fontWeight:active?600:400,transition:"all 0.15s",
+    width:"100%",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",
   }},label);
 }
 
@@ -235,7 +643,7 @@ function SubTabPill({label,active,onClick}){
 // ── MonthCalendar ──────────────────────────────────────────────
 function MonthCalendar({ month, onPrev, onNext, getCellBg, getCellContent, today, minMonth, onDayClick }){
   const [y, mo] = month.split("-").map(Number);
-  const monthLabel = new Date(y, mo-1, 1).toLocaleDateString("en-IN", {month:"long", year:"numeric"});
+  const monthLabel = new Date(y, mo-1, 1).toLocaleDateString("en-IN", {month:"short", year:"numeric"});
   const firstDow = (new Date(y, mo-1, 1).getDay() + 6) % 7;
   const daysInMonth = new Date(y, mo, 0).getDate();
   const moStr = String(mo).padStart(2,"0");
@@ -246,19 +654,19 @@ function MonthCalendar({ month, onPrev, onNext, getCellBg, getCellContent, today
   const atMin = !!minMonth && month <= minMonth;
   const navBtn = (lbl, cb, dis) => h("button", {onClick:cb, disabled:dis, style:{
     background:"transparent", border:`0.5px solid ${D.border}`,
-    color:dis?D.hint:D.muted, borderRadius:8, padding:"4px 16px",
-    fontSize:17, cursor:dis?"not-allowed":"pointer", lineHeight:1,
+    color:dis?D.hint:D.muted, borderRadius:6, padding:"1px 9px",
+    fontSize:12, cursor:dis?"not-allowed":"pointer", lineHeight:1.6,
   }}, lbl);
-  return h("div", null,
-    h("div", {style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}},
+  return h("div", {style:{maxWidth:230,margin:"0 auto"}},
+    h("div", {style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:7}},
       navBtn("‹", onPrev, atMin),
-      h("span", {style:{fontSize:13,fontWeight:500,color:D.text}}, monthLabel),
+      h("span", {style:{fontSize:11,fontWeight:500,color:D.text}}, monthLabel),
       navBtn("›", onNext, atMax)
     ),
-    h("div", {style:{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:3,marginBottom:4}},
-      ...["M","T","W","T","F","S","S"].map((d,i)=>h("div",{key:i,style:{textAlign:"center",fontSize:9,color:D.muted,fontWeight:500}},d))
+    h("div", {style:{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2,marginBottom:2}},
+      ...["M","T","W","T","F","S","S"].map((d,i)=>h("div",{key:i,style:{textAlign:"center",fontSize:7,color:D.muted,fontWeight:500}},d))
     ),
-    h("div", {style:{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:3}},
+    h("div", {style:{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2}},
       ...cells.map((key,i)=>{
         if(!key) return h("div",{key:"e"+i,style:{aspectRatio:"1"}});
         const dayNum = parseInt(key.split("-")[2]);
@@ -267,20 +675,19 @@ function MonthCalendar({ month, onPrev, onNext, getCellBg, getCellContent, today
         const isToday = key===today, isFuture = key>today;
         const clickable = onDayClick && !isFuture;
         return h("div",{key, title:key, onClick:clickable?()=>onDayClick(key):undefined, style:{
-          aspectRatio:"1", borderRadius:6,
+          aspectRatio:"1", borderRadius:3,
           background: isFuture?"transparent":bg,
-          border: isToday?`2px solid ${D.accent}`:isFuture?`0.5px solid ${D.hint}`:"none",
-          display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"space-between",
-          padding:"3px 2px 2px",
+          border: isToday?`1.5px solid ${D.accent}`:isFuture?`0.5px solid ${D.hint}`:"none",
+          display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center",
+          overflow:"hidden",
           cursor: clickable?"pointer":"default",
         }},
-          h("div",{style:{flex:1,display:"flex",alignItems:"center",justifyContent:"center",width:"100%"}},
-            !isFuture&&content&&h("span",{style:{fontSize:"clamp(9px,1.9vw,14px)",lineHeight:1.1,textAlign:"center"}},content)
-          ),
-          h("div",{style:{
-            fontSize:"clamp(6px,1.2vw,9px)", lineHeight:1, fontWeight:500,
-            color: isFuture?"#1e1e1b":bg===D.hint?"#3a3a36":"rgba(255,255,255,0.45)",
-          }}, dayNum)
+          !isFuture&&content
+            ? h("span",{style:{fontSize:8,lineHeight:1}},content)
+            : h("span",{style:{
+                fontSize:6, lineHeight:1,
+                color: isFuture?"#1e1e1b":bg===D.hint?"#3a3a36":"rgba(255,255,255,0.5)",
+              }}, dayNum)
         );
       })
     )
@@ -307,8 +714,9 @@ function calcNutStreak(byDate, cheatDays){
   return streak;
 }
 
-function calcActStreak(actByDate){
-  const isValid = k => (actByDate[k]||[]).some(a=>a.calories_burned>=ACT_MIN);
+function calcActStreak(actByDate, actCheatDays){
+  const cheats = actCheatDays || new Set();
+  const isValid = k => cheats.has(k) || (actByDate[k]||[]).some(a=>a.calories_burned>=ACT_MIN);
   const today = todayStr();
   const todayDt = new Date(today+"T12:00:00");
   let streak=0;
@@ -319,6 +727,205 @@ function calcActStreak(actByDate){
     if(isValid(k)) streak++; else break;
   }
   return streak;
+}
+
+// ── Body Goals: completion, streak, progression ─────────────────
+function bodySetTotals(daySets){
+  // sums logged values per exercise for one day's array of body_sets rows
+  const totals={};
+  (daySets||[]).forEach(s=>{ totals[s.exercise]=(totals[s.exercise]||0)+(s.value||0); });
+  return totals;
+}
+function bodyDailySeries(exKey, domainKeys, bodyByDate){
+  return domainKeys.map(k => bodySetTotals(bodyByDate[k]||[])[exKey] || 0);
+}
+function dailyCompletion(daySets, targets){
+  const totals=bodySetTotals(daySets);
+  const active=Object.entries(targets).filter(([,t])=>t>0);
+  if(!active.length) return 0;
+  const sum=active.reduce((s,[ex,t])=>s+Math.min((totals[ex]||0)/t,1),0);
+  return sum/active.length;
+}
+function calcBodyStreak(bodyByDate, targets){
+  const isGood = k => dailyCompletion(bodyByDate[k]||[], targets) >= BODY_GOOD_DAY_PCT;
+  const today = todayStr();
+  const todayDt = new Date(today+"T12:00:00");
+  let streak=0;
+  const startI = isGood(today)?0:1;
+  for(let i=startI;i<90;i++){
+    const d=new Date(todayDt); d.setDate(d.getDate()-i);
+    const k=d.toISOString().split("T")[0];
+    if(isGood(k)) streak++; else break;
+  }
+  return streak;
+}
+function last7Keys(today){
+  const todayDt=new Date(today+"T12:00:00");
+  return Array.from({length:7},(_,i)=>{ const d=new Date(todayDt); d.setDate(d.getDate()-(6-i)); return d.toISOString().split("T")[0]; });
+}
+// Returns the block/stage index the data justifies advancing to (purely derived,
+// caller decides whether/when to persist it to settings).
+function computeBlockAdvance(bodyByDate, blockIndex, blockEnteredAt, today){
+  if(blockIndex>=WEEK_BLOCKS.length-1) return blockIndex;
+  const minDays = WEEK_BLOCKS[blockIndex].minDays;
+  const elapsed = Math.floor((new Date(today+"T12:00:00") - new Date(blockEnteredAt+"T12:00:00"))/86400000);
+  if(elapsed < minDays) return blockIndex;
+  const targets = WEEK_BLOCKS[blockIndex].targets;
+  const goodCount = last7Keys(today).filter(k=>dailyCompletion(bodyByDate[k]||[],targets) >= BODY_ADVANCE_PCT).length;
+  return goodCount >= BODY_ADVANCE_DAYS ? blockIndex+1 : blockIndex;
+}
+function computePullupStageAdvance(bodyByDate, stageIndex, stageEnteredAt, today){
+  if(stageIndex>=PULLUP_STAGES.length-1) return stageIndex;
+  const totalsFor = k => bodySetTotals(bodyByDate[k]||[]);
+  if(stageIndex===0){
+    const elapsed = Math.floor((new Date(today+"T12:00:00") - new Date(stageEnteredAt+"T12:00:00"))/86400000);
+    if(elapsed<21) return 0;
+    const hitDays = last7Keys(today).filter(k=>(totalsFor(k).negative_pullup||0) >= 10).length;
+    return hitDays>=5 ? 1 : 0;
+  }
+  if(stageIndex===1){
+    const everLoggedFull = Object.values(bodyByDate).some(rows=>(rows||[]).some(s=>s.exercise==="full_pullup" && s.value>0));
+    return everLoggedFull ? 2 : 1;
+  }
+  if(stageIndex===2){
+    const maxSingleDay = Math.max(0, ...Object.keys(bodyByDate).map(k=>totalsFor(k).full_pullup||0));
+    return maxSingleDay>=3 ? 3 : 2;
+  }
+  return stageIndex;
+}
+
+// ── Log tab — form components ────────────────────────────────
+function fieldStyle(extra){
+  return {background:D.surface,border:`0.5px solid ${D.border}`,color:D.text,borderRadius:8,padding:"7px 10px",fontSize:12,fontFamily:"inherit",...extra};
+}
+// Parses "Name words... cal protein carbs fat fiber" — trailing numeric
+// tokens (up to 5) become macros in that fixed order, the rest is the name.
+// Mirrors the shorthand pattern used when typing meals straight to the bot.
+function parseQuickMealLine(line){
+  const tokens = line.trim().split(/\s+/);
+  const nums = [];
+  let i = tokens.length-1;
+  while(i>=0 && nums.length<5 && /^-?\d+\.?\d*$/.test(tokens[i])){
+    nums.unshift(parseFloat(tokens[i])); i--;
+  }
+  if(!nums.length) return null;
+  const name = tokens.slice(0,i+1).join(" ").trim();
+  if(!name) return null;
+  const [cal=0,protein=0,carbs=0,fat=0,fiber=0] = nums;
+  return {name, cal, protein, carbs, fat, fiber};
+}
+function LogMealForm({onSubmit, busy}){
+  const [mode, setMode] = useState("quick");
+  const [line, setLine] = useState("");
+  const [lineErr, setLineErr] = useState(null);
+  const [f, setF] = useState({name:"",cal:"",protein:"",carbs:"",fat:"",fiber:""});
+  const set = (k,v) => setF(prev=>({...prev,[k]:v}));
+  const valid = f.name.trim() && f.cal!=="";
+  const modeBtn = (m,label) => h("button",{onClick:()=>setMode(m),style:{
+    flex:1,fontSize:11,padding:"5px",borderRadius:7,fontWeight:mode===m?600:400,
+    background:mode===m?D.accent:"transparent",color:mode===m?D.accentText:D.muted,
+    border:`0.5px solid ${mode===m?D.accent:D.border}`
+  }},label);
+  return h("div",null,
+    h("div",{style:{display:"flex",gap:6,marginBottom:10}}, modeBtn("quick","Quick"), modeBtn("detailed","Detailed")),
+    mode==="quick" ? h("div",null,
+      h("input",{type:"text",placeholder:"e.g. Chicken bhurji 2 dosa 400 27 41 15 2",value:line,
+        onChange:e=>{setLine(e.target.value); setLineErr(null);},
+        style:fieldStyle({width:"100%",marginBottom:6})}),
+      h("div",{style:{fontSize:10,color:D.muted,marginBottom:9,lineHeight:1.5}},
+        "Name, then numbers in order: cal · protein · carbs · fat · fiber (trailing ones optional)"),
+      lineErr&&h("div",{style:{fontSize:11,color:"#d08080",marginBottom:9}},lineErr),
+      h("button",{disabled:!line.trim()||busy,onClick:()=>{
+          const parsed = parseQuickMealLine(line);
+          if(!parsed){ setLineErr("Couldn't find a name + at least a calorie number."); return; }
+          onSubmit(parsed); setLine(""); setLineErr(null);
+        }, style:{width:"100%",background:line.trim()?D.accent:D.hint,color:line.trim()?D.accentText:D.muted,border:"none",borderRadius:8,padding:"8px",fontSize:12,fontWeight:600,opacity:busy?0.6:1}},
+        busy?"Logging...":"Log meal")
+    ) : h("div",null,
+      h("input",{type:"text",placeholder:"Meal name",value:f.name,onChange:e=>set("name",e.target.value),
+        style:fieldStyle({width:"100%",marginBottom:7})}),
+      h("div",{style:{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:6,marginBottom:9}},
+        ...[["cal","Cal"],["protein","Pro g"],["carbs","Carb g"],["fat","Fat g"],["fiber","Fiber g"]].map(([k,ph])=>
+          h("input",{key:k,type:"number",placeholder:ph,value:f[k],onChange:e=>set(k,e.target.value),style:fieldStyle({width:"100%"})})
+        )
+      ),
+      h("button",{disabled:!valid||busy,onClick:()=>{
+          onSubmit({name:f.name.trim(), cal:+f.cal||0, protein:+f.protein||0, carbs:+f.carbs||0, fat:+f.fat||0, fiber:+f.fiber||0});
+          setF({name:"",cal:"",protein:"",carbs:"",fat:"",fiber:""});
+        }, style:{width:"100%",background:valid?D.accent:D.hint,color:valid?D.accentText:D.muted,border:"none",borderRadius:8,padding:"8px",fontSize:12,fontWeight:600,opacity:busy?0.6:1}},
+        busy?"Logging...":"Log meal")
+    )
+  );
+}
+function LogWorkoutForm({onSubmit, busy}){
+  const [activity, setActivity] = useState("walk");
+  const [duration, setDuration] = useState("30");
+  const [intensity, setIntensity] = useState("moderate");
+  const cal = calcActivityCalories(activity, +duration||0, intensity);
+  const valid = activity && (+duration||0) > 0;
+  return h("div",null,
+    h("div",{style:{display:"grid",gridTemplateColumns:"1.3fr 0.8fr 1fr",gap:6,marginBottom:9}},
+      h("select",{value:activity,onChange:e=>setActivity(e.target.value),style:fieldStyle({width:"100%"})},
+        ...ACTIVITY_LIST.map(a=>h("option",{key:a,value:a},actIcon(a)+" "+a.charAt(0).toUpperCase()+a.slice(1)))),
+      h("input",{type:"number",placeholder:"min",value:duration,onChange:e=>setDuration(e.target.value),style:fieldStyle({width:"100%"})}),
+      h("select",{value:intensity,onChange:e=>setIntensity(e.target.value),style:fieldStyle({width:"100%"})},
+        ...["light","moderate","vigorous"].map(i=>h("option",{key:i,value:i},i)))
+    ),
+    h("div",{style:{fontSize:11,color:D.muted,marginBottom:9}},
+      `≈ ${cal} kcal burned`,h("span",{style:{color:cal>=ACT_MIN?D.accent:D.muted,marginLeft:6}},cal>=ACT_MIN?"✓ valid":`${ACT_MIN-cal} kcal short`)),
+    h("button",{disabled:!valid||busy,onClick:()=>onSubmit({
+        activity, duration_minutes:+duration, intensity,
+        calories_burned:cal, met_value:METS[activity][intensity]
+      }), style:{width:"100%",background:valid?D.accent:D.hint,color:valid?D.accentText:D.muted,border:"none",borderRadius:8,padding:"8px",fontSize:12,fontWeight:600,opacity:busy?0.6:1}},
+      busy?"Logging...":"Log workout")
+  );
+}
+function LogMealRow({meal, editing, onEditStart, onEditCancel, onSave, onDelete}){
+  const [f, setF] = useState(null);
+  useEffect(()=>{ if(editing) setF({cal:meal.cal,protein:meal.protein,carbs:meal.carbs,fat:meal.fat,fiber:meal.fiber||0}); },[editing]);
+  if(editing && f){
+    return h("div",{style:{padding:"10px 0",borderBottom:`0.5px solid ${D.border}`}},
+      h("div",{style:{fontSize:13,fontWeight:500,color:D.text,marginBottom:6}},meal.name),
+      h("div",{style:{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:5,marginBottom:7}},
+        ...["cal","protein","carbs","fat","fiber"].map(k=>
+          h("input",{key:k,type:"number",value:f[k],onChange:e=>setF(prev=>({...prev,[k]:+e.target.value})),style:fieldStyle({width:"100%"})}))
+      ),
+      h("div",{style:{display:"flex",gap:6}},
+        h("button",{onClick:()=>onSave(meal.id,f),style:{flex:1,background:D.accent,color:D.accentText,border:"none",borderRadius:8,padding:"6px",fontSize:11,fontWeight:600}},"Save"),
+        h("button",{onClick:onEditCancel,style:{flex:1,background:"transparent",color:D.muted,border:`0.5px solid ${D.border}`,borderRadius:8,padding:"6px",fontSize:11}},"Cancel")
+      )
+    );
+  }
+  return h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 0",borderBottom:`0.5px solid ${D.border}`}},
+    h("div",null,
+      h("div",{style:{fontSize:13,color:D.text}},meal.name),
+      h("div",{style:{fontSize:11,color:D.muted,marginTop:2}},
+        `${Math.round(meal.cal)} kcal · ${Math.round(meal.protein)}g pro · ${displayTime(meal.meal_time)}`)
+    ),
+    h("div",{style:{display:"flex",gap:5,flexShrink:0}},
+      h("button",{onClick:onEditStart,style:{background:"transparent",border:`0.5px solid ${D.border}`,color:D.muted,borderRadius:7,padding:"4px 9px",fontSize:11}},"✏️"),
+      h("button",{onClick:()=>onDelete(meal.id),style:{background:"transparent",border:`0.5px solid #5a2a2a`,color:"#d08080",borderRadius:7,padding:"4px 9px",fontSize:11}},"🗑")
+    )
+  );
+}
+function SavePresetForm({onSave, busy}){
+  const [f, setF] = useState({name:"",cal:"",protein:"",carbs:"",fat:"",fiber:""});
+  const set=(k,v)=>setF(prev=>({...prev,[k]:v}));
+  const valid = f.name.trim() && f.cal!=="";
+  return h("div",null,
+    h("input",{type:"text",placeholder:"Preset name",value:f.name,onChange:e=>set("name",e.target.value),
+      style:fieldStyle({width:"100%",marginBottom:7})}),
+    h("div",{style:{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:6,marginBottom:9}},
+      ...[["cal","Cal"],["protein","Pro g"],["carbs","Carb g"],["fat","Fat g"],["fiber","Fiber g"]].map(([k,ph])=>
+        h("input",{key:k,type:"number",placeholder:ph,value:f[k],onChange:e=>set(k,e.target.value),style:fieldStyle({width:"100%"})})
+      )
+    ),
+    h("button",{disabled:!valid||busy,onClick:()=>{
+        onSave(f.name.trim(), {cal:+f.cal||0, protein:+f.protein||0, carbs:+f.carbs||0, fat:+f.fat||0, fiber:+f.fiber||0});
+        setF({name:"",cal:"",protein:"",carbs:"",fat:"",fiber:""});
+      }, style:{width:"100%",background:"transparent",color:D.text,border:`0.5px solid ${D.border}`,borderRadius:8,padding:"7px",fontSize:12,fontWeight:500}},
+      "💾 Save preset")
+  );
 }
 
 // ── App ────────────────────────────────────────────────────────
@@ -338,6 +945,7 @@ function App(){
   const [actHist,  setActHist]  = useState([]);    // 90-day activity history
   const [stepsData,setSteps]    = useState({});    // { date: stepCount }
   const [cheatDays,setCD]       = useState(()=>new Set());
+  const [actCheatDays,setActCD] = useState(()=>new Set());
   const [settings, setSettings] = useState({});
   const [loading,  setLoading]  = useState(true);
   const [error,    setError]    = useState(null);
@@ -345,6 +953,58 @@ function App(){
   const [tick,     setTick]     = useState(0);
   const [nutCalMonth, setNutCal] = useState(()=>todayStr().slice(0,7));
   const [actCalMonth, setActCal] = useState(()=>todayStr().slice(0,7));
+  const [bodyTab,     setBodyTab]= useState("today");
+  const [bodyHist,    setBodyHist] = useState([]);   // 90-day body_sets history
+  const [bodyCalMonth,setBodyCal]= useState(()=>todayStr().slice(0,7));
+  const [bodyExp,      setBodyExp]= useState(()=>new Set([todayStr()]));
+  const [schedOpen,    setSchedOpen] = useState(false);
+  const [presets,      setPresets]   = useState([]);
+  const [editMealId,   setEditMealId]= useState(null);
+  const [logBusy,      setLogBusy]   = useState(false);
+  const [logMsg,       setLogMsg]    = useState(null);
+  const [todaySummary, setTodaySummary] = useState(null);
+  const [summaryBusy,  setSummaryBusy] = useState(false);
+  function flashMsg(msg){ setLogMsg(msg); setTimeout(()=>setLogMsg(null), 3500); }
+
+  function legacyCopy(text, onDone){
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.cssText = "position:fixed;top:-9999px;left:-9999px;opacity:0";
+    document.body.appendChild(ta);
+    ta.focus(); ta.select();
+    try{ document.execCommand("copy"); onDone("Copied!"); }
+    catch(e){ onDone("Copy failed — select text manually."); }
+    document.body.removeChild(ta);
+  }
+
+  async function fetchTodaySummary(){
+    setSummaryBusy(true);
+    try{
+      const d = todayStr();
+      const [mR, aR] = await Promise.all([
+        fetch(`${URL_BASE}/meals?meal_date=eq.${d}&order=logged_at.asc`,{headers:HDRS}),
+        fetch(`${URL_BASE}/activities?activity_date=eq.${d}`,{headers:HDRS})
+      ]);
+      const meals = mR.ok ? await mR.json() : [];
+      const activities = aR.ok ? await aR.json() : [];
+      const cal     = Math.round(meals.reduce((s,m)=>s+(m.cal||0),0));
+      const protein = Math.round(meals.reduce((s,m)=>s+(m.protein||0),0));
+      const carbs   = Math.round(meals.reduce((s,m)=>s+(m.carbs||0),0));
+      const fat     = Math.round(meals.reduce((s,m)=>s+(m.fat||0),0));
+      const fiber   = Math.round(meals.reduce((s,m)=>s+(m.fiber||0),0));
+      const burned  = Math.round(activities.reduce((s,a)=>s+(a.calories_burned||0),0));
+      const macroLine = `Cal: ${cal}/${TARGETS.cal} kcal | Pro: ${protein}/${TARGETS.protein}g | Carbs: ${carbs}/${TARGETS.carbs}g | Fat: ${fat}/${TARGETS.fat}g | Fiber: ${fiber}/${TARGETS.fiber}g | Burned: ${burned} kcal`;
+      const mealLine = meals.length
+        ? `Meals: ${meals.map(m=>m.name).join(", ")}`
+        : "Meals: none";
+      const actLine = activities.length
+        ? `Activity: ${activities.map(a=>`${a.activity} ${a.duration_minutes}min`).join(", ")}`
+        : "Activity: none";
+      setTodaySummary(`${macroLine}\n${mealLine}\n${actLine}`);
+    }catch(e){ setTodaySummary("Failed to fetch today's summary."); }
+    finally{ setSummaryBusy(false); }
+  }
+  const toggleBodyDay = d => setBodyExp(prev=>{ const s=new Set(prev); s.has(d)?s.delete(d):s.add(d); return s; });
 
   function goDate(d){ const dt=new Date(viewDate+"T12:00:00"); dt.setDate(dt.getDate()+d); const s=dt.toISOString().split("T")[0]; if(s<=todayStr()) setVD(s); }
 
@@ -370,18 +1030,51 @@ function App(){
       const d90 = new Date(today+"T12:00:00"); d90.setDate(d90.getDate()-89);
       const histFrom = d90.toISOString().split("T")[0];
       try{
-        const [viewM, histM, viewA, histA, cd, sett, stps] = await Promise.all([
+        const [viewM, histM, viewA, histA, cd, actCd, sett, stps, bodyH, presetList] = await Promise.all([
           apiFetch(viewDate, viewDate),
           apiFetch(histFrom, today),
           apiFetchActivities(viewDate, viewDate),
           apiFetchActivities(histFrom, today),
           apiFetchCheatDays(),
+          apiFetchActCheatDays(),
           apiFetchSettings(),
           apiFetchSteps(histFrom, today),
+          apiFetchBodySets(histFrom, today),
+          apiListPresets(),
         ]);
         setVM(viewM); setHist(histM);
         setActs(viewA); setActHist(histA);
-        setCD(cd); setSettings(sett); setSteps(stps);
+        setCD(cd); setActCD(actCd); setSettings(sett); setSteps(stps);
+        setBodyHist(bodyH); setPresets(presetList);
+
+        // ── Body Goals: auto-advance block/pull-up stage + credit freezes ──
+        const bByDate={}; bodyH.forEach(s=>{ (bByDate[s.set_date]=bByDate[s.set_date]||[]).push(s); });
+        let blockIdx = parseInt(sett.body_block_index||"0");
+        let blockAt  = sett.body_block_entered_at || today;
+        const newBlockIdx = computeBlockAdvance(bByDate, blockIdx, blockAt, today);
+        if(newBlockIdx !== blockIdx){
+          await apiUpsertSetting("body_block_index", newBlockIdx);
+          await apiUpsertSetting("body_block_entered_at", today);
+          sett.body_block_index=String(newBlockIdx); sett.body_block_entered_at=today;
+        }
+        let stageIdx = parseInt(sett.pullup_stage_index||"0");
+        let stageAt  = sett.pullup_stage_entered_at || today;
+        const newStageIdx = computePullupStageAdvance(bByDate, stageIdx, stageAt, today);
+        if(newStageIdx !== stageIdx){
+          await apiUpsertSetting("pullup_stage_index", newStageIdx);
+          await apiUpsertSetting("pullup_stage_entered_at", today);
+          sett.pullup_stage_index=String(newStageIdx); sett.pullup_stage_entered_at=today;
+        }
+        const targetsNow = WEEK_BLOCKS[newBlockIdx].targets;
+        const bStreak = calcBodyStreak(bByDate, targetsNow);
+        const bFreezeBal = parseInt(sett.body_freeze_balance||"0");
+        const bMilestone = parseInt(sett.body_streak_milestone_credited||"0");
+        if(bStreak>0 && bStreak%BODY_FREEZE_EVERY===0 && bStreak>bMilestone && bFreezeBal<BODY_FREEZE_MAX){
+          await apiUpsertSetting("body_freeze_balance", bFreezeBal+1);
+          await apiUpsertSetting("body_streak_milestone_credited", bStreak);
+          sett.body_freeze_balance=String(bFreezeBal+1); sett.body_streak_milestone_credited=String(bStreak);
+        }
+        setSettings({...sett});
       } catch(e){ setError(e.message); }
       finally{ setLoading(false); }
     })();
@@ -407,9 +1100,104 @@ function App(){
   },[actHist]);
 
   const nutStreak = useMemo(()=>calcNutStreak(byDate,cheatDays),[byDate,cheatDays]);
-  const actStreak = useMemo(()=>calcActStreak(actByDate),[actByDate]);
+  const actStreak = useMemo(()=>calcActStreak(actByDate, actCheatDays),[actByDate, actCheatDays]);
   const freezeBal = parseInt(settings.freeze_balance||"0");
   const actFreezeBal = parseInt(settings.act_freeze_balance||"0");
+
+  // ── Body Goals derived data ──────────────────────────────────
+  const bodyByDate = useMemo(()=>{
+    const m={}; bodyHist.forEach(s=>{ (m[s.set_date]=m[s.set_date]||[]).push(s); }); return m;
+  },[bodyHist]);
+  const blockIndex = Math.min(parseInt(settings.body_block_index||"0"), WEEK_BLOCKS.length-1);
+  const blockEnteredAt = settings.body_block_entered_at || todayStr();
+  const pullupStageIndex = Math.min(parseInt(settings.pullup_stage_index||"0"), PULLUP_STAGES.length-1);
+  const currentTargets = WEEK_BLOCKS[blockIndex].targets;
+  const bodyStreak = useMemo(()=>calcBodyStreak(bodyByDate, currentTargets),[bodyByDate, currentTargets]);
+  const bodyFreezeBal = parseInt(settings.body_freeze_balance||"0");
+  const viewBodyTotals = useMemo(()=>bodySetTotals(bodyByDate[viewDate]||[]),[bodyByDate, viewDate]);
+  const viewBodyCompletion = useMemo(()=>dailyCompletion(bodyByDate[viewDate]||[], currentTargets),[bodyByDate, viewDate, currentTargets]);
+  const bodyTrendDomain = useMemo(()=>{
+    const keys = Object.keys(bodyByDate);
+    if(!keys.length) return [];
+    const earliest = keys.sort()[0];
+    const todayDt = new Date(todayStr()+"T12:00:00");
+    const earliestDt = new Date(earliest+"T12:00:00");
+    const days = Math.min(Math.floor((todayDt-earliestDt)/86400000)+1, 90);
+    return Array.from({length:days},(_,i)=>{ const d=new Date(todayDt); d.setDate(d.getDate()-(days-1-i)); return d.toISOString().split("T")[0]; });
+  },[bodyByDate]);
+
+  async function logBodySet(exercise, value){
+    try{ await apiInsertBodySet(viewDate, exercise, value); refresh(); }
+    catch(e){ setError(e.message); }
+  }
+
+  // ── Log tab — action handlers (mirrors bot.py write commands) ──
+  async function submitMeal(meal){
+    setLogBusy(true);
+    try{ await apiInsert({...meal, meal_date:viewDate, meal_time:fmtTime()}); flashMsg(`✓ Logged: ${meal.name}`); refresh(); }
+    catch(e){ setError(e.message); } finally{ setLogBusy(false); }
+  }
+  async function submitWorkout(act){
+    setLogBusy(true);
+    try{ await apiInsertActivity({...act, activity_date:viewDate}); flashMsg(`✓ Logged: ${act.activity}`); refresh(); }
+    catch(e){ setError(e.message); } finally{ setLogBusy(false); }
+  }
+  async function saveMealEdit(id, updates){
+    try{ await apiUpdateMeal(id, updates); setEditMealId(null); flashMsg("✓ Updated"); refresh(); }
+    catch(e){ setError(e.message); }
+  }
+  async function deleteMeal(id){
+    try{ await apiDeleteMealById(id); flashMsg("🗑 Removed"); refresh(); }
+    catch(e){ setError(e.message); }
+  }
+  async function deleteActivityEntry(id){
+    try{ await apiDeleteActivityById(id); flashMsg("🗑 Removed"); refresh(); }
+    catch(e){ setError(e.message); }
+  }
+  async function undoLastMeal(){
+    if(!viewMeals.length){ flashMsg("Nothing to undo."); return; }
+    const last = [...viewMeals].sort((a,b)=>(a.logged_at||"").localeCompare(b.logged_at||""))[viewMeals.length-1];
+    try{ await apiDeleteMealById(last.id); flashMsg(`↩️ Removed: ${last.name}`); refresh(); }
+    catch(e){ setError(e.message); }
+  }
+  async function savePresetHandler(name, macros){
+    try{ await apiSavePreset(name, macros); flashMsg(`💾 Saved ${name}`); refresh(); }
+    catch(e){ setError(e.message); }
+  }
+  async function logFromPreset(p){
+    setLogBusy(true);
+    const niceName = titleCase(p.name);
+    try{ await apiInsert({name:niceName, cal:p.cal, protein:p.protein, carbs:p.carbs, fat:p.fat, fiber:p.fiber||0, meal_date:viewDate, meal_time:fmtTime()});
+      flashMsg(`✓ Logged: ${niceName}`); refresh(); }
+    catch(e){ setError(e.message); } finally{ setLogBusy(false); }
+  }
+  async function deletePresetHandler(name){
+    try{ await apiDeletePreset(name); flashMsg(`🗑 Removed preset ${name}`); refresh(); }
+    catch(e){ setError(e.message); }
+  }
+  async function toggleCheatDay(){
+    const isCheat = cheatDays.has(viewDate);
+    if(!isCheat && freezeBal<=0){ flashMsg("❌ No nutrition freezes available."); return; }
+    try{
+      if(isCheat){ await apiRemoveCheatDay(viewDate); flashMsg("Cheat day removed"); }
+      else{ await apiAddCheatDay(viewDate); flashMsg("❄️ Cheat day activated"); }
+      refresh();
+    } catch(e){ setError(e.message); }
+  }
+  async function toggleActCheatDay(){
+    const isCheat = actCheatDays.has(viewDate);
+    if(!isCheat && actFreezeBal<=0){ flashMsg("❌ No activity freezes available."); return; }
+    try{
+      if(isCheat){ await apiRemoveActCheatDay(viewDate); flashMsg("Activity rest day removed"); }
+      else{ await apiAddActCheatDay(viewDate); flashMsg("❄️ Activity rest day activated"); }
+      refresh();
+    } catch(e){ setError(e.message); }
+  }
+  async function copyPreviousDayHandler(){
+    setLogBusy(true);
+    try{ const n = await apiCopyPreviousDay(viewDate); flashMsg(n>0?`📋 Copied ${n} meal${n!==1?"s":""} from the previous day`:"Nothing to copy from the previous day."); refresh(); }
+    catch(e){ setError(e.message); } finally{ setLogBusy(false); }
+  }
 
   async function seedToday(){
     setSeeding(true);
@@ -455,8 +1243,11 @@ function App(){
           // Activity streak chip
           h("div",{style:{background:D.card,border:`0.5px solid ${D.border}`,borderRadius:20,padding:"5px 13px",fontSize:12,color:D.text,display:"flex",gap:6,alignItems:"center"}},
             "🏃 ",h("strong",{style:{fontWeight:600}},actStreak),h("span",{style:{color:D.muted}},"act")),
-          freezeBal>0&&h("div",{style:{background:D.card,border:`0.5px solid #4a3a6a`,borderRadius:20,padding:"5px 13px",fontSize:12,color:"#b09ad0",display:"flex",gap:6,alignItems:"center"}},
-            "❄️ ",h("strong",{style:{fontWeight:600}},freezeBal)),
+          // Body Goals streak chip
+          h("div",{style:{background:D.card,border:`0.5px solid ${D.border}`,borderRadius:20,padding:"5px 13px",fontSize:12,color:D.text,display:"flex",gap:6,alignItems:"center"}},
+            "💪 ",h("strong",{style:{fontWeight:600}},bodyStreak),h("span",{style:{color:D.muted}},"body")),
+          (freezeBal>0||actFreezeBal>0||bodyFreezeBal>0)&&h("div",{style:{background:D.card,border:`0.5px solid #4a3a6a`,borderRadius:20,padding:"5px 13px",fontSize:12,color:"#b09ad0",display:"flex",gap:6,alignItems:"center"}},
+            "❄️ ",h("strong",{style:{fontWeight:600}},freezeBal+actFreezeBal+bodyFreezeBal)),
           viewMeals.length===0&&!loading&&viewDate===today&&h("button",{onClick:seedToday,disabled:seeding,
             style:{background:D.accent,color:D.accentText,border:"none",borderRadius:20,padding:"6px 15px",fontSize:12,fontWeight:600,opacity:seeding?0.6:1}},
             seeding?"Logging...":"↑ Sample day"),
@@ -465,11 +1256,13 @@ function App(){
       )
     ),
 
-    // Main tab nav
-    h("div",{style:{display:"flex",gap:6,marginBottom:"1.5rem",flexWrap:"wrap"}},
+    // Main tab nav — equal-width grid so it never wraps unevenly, and shrinks gracefully
+    h("div",{style:{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:4,marginBottom:"1.5rem"}},
+      h(TabPill,{label:"Summary",  active:mainTab==="summary",  onClick:()=>setMainTab("summary")}),
       h(TabPill,{label:"Nutrition",active:mainTab==="nutrition",onClick:()=>setMainTab("nutrition")}),
-      h(TabPill,{label:"Activity",  active:mainTab==="activity", onClick:()=>setMainTab("activity")}),
-      h(TabPill,{label:"Summary",   active:mainTab==="summary",  onClick:()=>setMainTab("summary")})
+      h(TabPill,{label:"Activity", active:mainTab==="activity", onClick:()=>setMainTab("activity")}),
+      h(TabPill,{label:"Body",     active:mainTab==="body",     onClick:()=>setMainTab("body")}),
+      h(TabPill,{label:"Log",      active:mainTab==="log",      onClick:()=>setMainTab("log")})
     ),
 
     error&&h("div",{style:{...card,background:"#1a0808",border:`0.5px solid #5a1a1a`,color:"#f08080",fontSize:13,lineHeight:1.6}},
@@ -927,24 +1720,366 @@ function App(){
     ),
 
     // ═══════════════════════════════════════════════════════
+    // BODY GOALS TAB
+    // ═══════════════════════════════════════════════════════
+    !loading&&mainTab==="body"&&h(Fragment,null,
+      h(BodyFigureDefs),
+      h("div",{className:"fade"},
+
+      // Sub-tab nav
+      h("div",{style:{display:"flex",gap:6,marginBottom:"1.25rem",flexWrap:"wrap"}},
+        h(SubTabPill,{label:"Today",   active:bodyTab==="today",   onClick:()=>setBodyTab("today")}),
+        h(SubTabPill,{label:"Log",     active:bodyTab==="log",     onClick:()=>setBodyTab("log")}),
+        h(SubTabPill,{label:"Progress",active:bodyTab==="progress",onClick:()=>setBodyTab("progress")}),
+        h(SubTabPill,{label:"Plan",    active:bodyTab==="plan",    onClick:()=>setBodyTab("plan")})
+      ),
+
+      // ── Body Goals: Today ─────────────────────────────────
+      bodyTab==="today"&&h("div",null,
+        h("div",{style:{display:"flex",alignItems:"center",gap:8,marginBottom:12}},
+          h("button",{onClick:()=>goDate(-1),style:{background:"transparent",border:`0.5px solid ${D.border}`,color:D.muted,borderRadius:8,padding:"4px 13px",fontSize:16,lineHeight:1}},"‹"),
+          h("input",{type:"date",value:viewDate,max:today,onChange:e=>e.target.value&&setVD(e.target.value),
+            style:{background:D.card,border:`0.5px solid ${D.border}`,color:D.text,borderRadius:8,padding:"5px 10px",fontSize:12,fontFamily:"inherit",flex:1,colorScheme:"dark"}}),
+          viewDate<today&&h("button",{onClick:()=>setVD(today),style:{fontSize:11,padding:"5px 12px",borderRadius:8,background:D.accent,color:D.accentText,border:"none",fontWeight:600,whiteSpace:"nowrap"}},"Today"),
+          h("button",{onClick:()=>goDate(1),disabled:viewDate>=today,style:{background:"transparent",border:`0.5px solid ${D.border}`,color:viewDate>=today?D.hint:D.muted,borderRadius:8,padding:"4px 13px",fontSize:16,lineHeight:1}},"›")
+        ),
+        h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}},
+          h("div",{style:{...card,marginBottom:0}},
+            h("div",{style:{fontSize:11,color:D.muted,marginBottom:4}},"Body streak"),
+            h("div",{style:{fontSize:24,fontWeight:600,color:D.text}},bodyStreak,
+              h("span",{style:{fontSize:12,color:D.muted,fontWeight:400,marginLeft:4}},"days")),
+            h("div",{style:{fontSize:11,color:D.muted,marginTop:2}},
+              `❄️ ${bodyFreezeBal}/2 freezes · good day ≥${Math.round(BODY_GOOD_DAY_PCT*100)}%`)
+          ),
+          h("div",{style:{...card,marginBottom:0}},
+            h("div",{style:{fontSize:11,color:D.muted,marginBottom:4}},"Today's completion"),
+            h("div",{style:{fontSize:24,fontWeight:600,color:viewBodyCompletion>=BODY_GOOD_DAY_PCT?D.accent:D.text}},
+              Math.round(viewBodyCompletion*100),h("span",{style:{fontSize:12,color:D.muted,fontWeight:400,marginLeft:2}},"%")),
+            h("div",{style:{fontSize:11,color:D.muted,marginTop:2}},WEEK_BLOCKS[blockIndex].label+" · "+WEEK_BLOCKS[blockIndex].tag)
+          )
+        ),
+        h("div",{style:{...card,display:"flex",justifyContent:"space-between",alignItems:"center"}},
+          h("div",{style:{fontSize:12,color:D.text}},"🆙 Pull-up stage: "+PULLUP_STAGES[pullupStageIndex].label),
+          h("div",{style:{fontSize:11,color:D.muted}},PULLUP_STAGES[pullupStageIndex].target)
+        ),
+        h("div",{style:card},
+          h("div",{onClick:()=>setSchedOpen(o=>!o),style:{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}},
+            h("div",{style:{...sHead,marginBottom:0}},"🕐 Daily schedule — trigger points"),
+            h("span",{style:{fontSize:13,color:D.muted,display:"inline-block",transform:schedOpen?"rotate(90deg)":"none",transition:"transform 0.2s"}},"›")
+          ),
+          schedOpen&&h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginTop:12}},
+            ...DAILY_SCHEDULE.map((s,i)=>h("div",{key:i,style:{background:D.surface,borderRadius:10,padding:"0.7rem 0.8rem"}},
+              h("div",{style:{fontSize:9,letterSpacing:"0.06em",textTransform:"uppercase",color:D.muted,marginBottom:4}},s.time),
+              h("div",{style:{fontSize:12,fontWeight:500,color:D.text,marginBottom:6}},s.title),
+              ...s.items.map((it,j)=>h("div",{key:j,style:{fontSize:11,color:D.muted,lineHeight:1.7}},"· "+it))
+            ))
+          )
+        ),
+        ...BODY_GROUP_ORDER.map(grp=>
+          h("div",{key:grp},
+            h("div",{style:{...sHead,marginTop:4}},BODY_GROUP_LABELS[grp]),
+            ...Object.entries(BODY_EXERCISES).filter(([,ex])=>ex.group===grp).map(([exKey,ex])=>
+              h(BodyExerciseCard,{key:exKey,exKey,ex,value:viewBodyTotals[exKey]||0,target:currentTargets[exKey]||0,onAdd:n=>logBodySet(exKey,n)})
+            )
+          )
+        )
+      ),
+
+      // ── Body Goals: Log ───────────────────────────────────
+      bodyTab==="log"&&h("div",null,
+        Object.keys(bodyByDate).length===0
+          ?h("div",{style:card},h(Empty,{icon:"💪",text:"Your full body-goals history will appear here."}))
+          :Object.entries(bodyByDate).sort((a,b)=>b[0].localeCompare(a[0])).map(([date,sets])=>{
+              const totals=bodySetTotals(sets);
+              const completion=dailyCompletion(sets,currentTargets);
+              const isToday=date===today, open=bodyExp.has(date);
+              const good=completion>=BODY_GOOD_DAY_PCT;
+              return h("div",{key:date,style:{...card,border:`0.5px solid ${isToday?D.accent:D.border}`,marginBottom:8}},
+                h("div",{onClick:()=>toggleBodyDay(date),style:{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer",marginBottom:open?10:0}},
+                  h("div",{style:{display:"flex",alignItems:"center",gap:8}},
+                    h("span",{style:{fontSize:13,color:D.muted,transition:"transform 0.2s",display:"inline-block",transform:open?"rotate(90deg)":"rotate(0deg)"}},"›"),
+                    h("span",{style:{fontSize:13,fontWeight:600,color:isToday?D.accent:D.text}},fmtDate(date)),
+                    isToday&&h("span",{style:{fontSize:10,color:D.accentText,background:D.accent,borderRadius:6,padding:"1px 7px",fontWeight:600}},"Today")
+                  ),
+                  h("div",{style:{display:"flex",gap:6,alignItems:"center"}},
+                    h(Pill,{label:`${Math.round(completion*100)}%`,color:good?D.accent:D.muted,bg:good?"#1a2a04":D.hint}),
+                    good&&h("span",{style:{fontSize:11,color:D.accent}},"✓")
+                  )
+                ),
+                open&&h("div",null,
+                  ...Object.entries(totals).map(([exKey,val])=>
+                    h("div",{key:exKey,style:{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:`0.5px solid ${D.border}`,fontSize:12}},
+                      h("span",{style:{color:D.text}},`${BODY_EXERCISES[exKey]?.icon||""} ${BODY_EXERCISES[exKey]?.label||exKey}`),
+                      h("span",{style:{color:D.muted}},`${val}${BODY_EXERCISES[exKey]?.unit==="sec"?"s":" reps"}`)
+                    )
+                  )
+                )
+              );
+            })
+      ),
+
+      // ── Body Goals: Progress ──────────────────────────────
+      // Trends/calendar/averages on top; roadmaps + constant reference at bottom.
+      bodyTab==="progress"&&h("div",null,
+        bodyTrendDomain.length===0
+          ? h("div",{style:card},h(Empty,{icon:"📈",text:"Log a few days to see your daily trend per exercise."}))
+          : h("div",{style:card},
+              h("div",{style:sHead},`Daily trend — ${bodyTrendDomain.length} day${bodyTrendDomain.length===1?"":"s"}`),
+              ...Object.entries(BODY_EXERCISES).map(([exKey,ex])=>{
+                const series = bodyDailySeries(exKey, bodyTrendDomain, bodyByDate);
+                const latest = series[series.length-1]||0;
+                const grpColor = (BODY_GROUP_COLORS[ex.group]||{}).c || D.accent;
+                return h("div",{key:exKey,style:{display:"flex",alignItems:"center",gap:8,marginBottom:10}},
+                  h("span",{style:{width:20,flexShrink:0,fontSize:14,textAlign:"center"}},ex.icon),
+                  h("div",{style:{flex:1,height:26}},h(Sparkline,{series,target:currentTargets[exKey]||0,color:grpColor})),
+                  h("span",{style:{width:30,flexShrink:0,fontSize:11,color:D.muted,textAlign:"right"}},latest)
+                );
+              })
+            ),
+        h("div",{style:card},
+          h("div",{style:sHead},"Completion — last 7 days"),
+          ...last7.map(key=>{
+            const pct=Math.round(dailyCompletion(bodyByDate[key]||[],currentTargets)*100);
+            const good=pct>=BODY_GOOD_DAY_PCT*100;
+            return h("div",{key,style:{display:"flex",alignItems:"center",gap:10,marginBottom:9}},
+              h("span",{style:{fontSize:11,color:key===today?D.accent:D.muted,fontWeight:key===today?600:400,width:46,flexShrink:0}},
+                new Date(key+"T12:00:00").toLocaleDateString("en-IN",{weekday:"short"})),
+              h("div",{style:{flex:1,height:6,background:D.hint,borderRadius:3,overflow:"hidden"}},
+                h("div",{style:{width:`${Math.min(pct,100)}%`,height:"100%",background:good?D.accent:"#3a3a36",borderRadius:3}})),
+              h("span",{style:{fontSize:11,color:D.muted,width:40,textAlign:"right"}},pct+"%")
+            );
+          })
+        ),
+        h("div",{style:card},
+          h("div",{style:sHead},"Monthly body goals"),
+          h(MonthCalendar,{
+            month:bodyCalMonth, onPrev:()=>navMonth(setBodyCal,-1), onNext:()=>navMonth(setBodyCal,+1),
+            today, minMonth:minCalMonth, onDayClick:key=>{ setVD(key); setBodyTab("today"); },
+            getCellBg:key=>{
+              if(!bodyByDate[key]) return D.hint;
+              const pct=dailyCompletion(bodyByDate[key]||[],currentTargets);
+              if(pct>=0.9) return "#5a9e2f"; if(pct>=BODY_GOOD_DAY_PCT) return "#8ec94a"; if(pct>=0.4) return "#c8a840"; return "#4a3a20";
+            },
+          }),
+          h("div",{style:{display:"flex",gap:10,marginTop:10,flexWrap:"wrap",justifyContent:"center"}},
+            ...[["#5a9e2f","≥90%"],["#8ec94a","≥75%"],["#c8a840","≥40%"],["#4a3a20","<40%"],[D.hint,"No data"]]
+              .map(([color,label])=>h("div",{key:label,style:{display:"flex",alignItems:"center",gap:4}},
+                h("div",{style:{width:8,height:8,borderRadius:2,background:color}}),
+                h("span",{style:{fontSize:9,color:D.muted}},label)))
+          )
+        ),
+        h("div",{style:card},
+          h("div",{style:sHead},"Lifetime totals"),
+          ...Object.entries(BODY_EXERCISES).map(([exKey,ex])=>{
+            const total=bodyHist.filter(s=>s.exercise===exKey).reduce((s,x)=>s+(x.value||0),0);
+            if(total<=0) return null;
+            return h("div",{key:exKey,style:{display:"flex",justifyContent:"space-between",padding:"5px 0",fontSize:12}},
+              h("span",{style:{color:D.text}},`${ex.icon} ${ex.label}`),
+              h("span",{style:{color:D.muted}},`${total.toLocaleString()}${ex.unit==="sec"?"s":" reps"}`)
+            );
+          })
+        ),
+
+        // ── Roadmaps / constant reference — bottom ──
+        h("div",{style:card},
+          h("div",{style:sHead},"Week targets"),
+          ...WEEK_BLOCKS.map((blk,i)=>
+            h("div",{key:i,style:{
+              background:i===blockIndex?D.surface:"transparent",
+              border:`0.5px solid ${i===blockIndex?D.accent:D.border}`,
+              borderRadius:10,padding:"0.7rem 0.85rem",marginBottom:8
+            }},
+              h("div",{style:{display:"flex",justifyContent:"space-between",marginBottom:6}},
+                h("span",{style:{fontSize:13,fontWeight:600,color:i===blockIndex?D.accent:D.text}},blk.label),
+                h("span",{style:{fontSize:11,color:D.muted}},blk.tag)
+              ),
+              h("div",{style:{display:"flex",flexWrap:"wrap",gap:6}},
+                ...Object.entries(blk.targets).filter(([,t])=>t>0).map(([exKey,t])=>
+                  h(Pill,{key:exKey,label:`${BODY_EXERCISES[exKey].icon} ${t}${BODY_EXERCISES[exKey].unit==="sec"?"s":""}`,color:D.muted,bg:D.hint})
+                )
+              )
+            )
+          )
+        ),
+        h("div",{style:card},
+          h("div",{style:sHead},"Pull-up roadmap"),
+          ...PULLUP_STAGES.map((st,i)=>
+            h("div",{key:i,style:{display:"flex",gap:12,padding:"0.6rem 0",borderBottom:i<PULLUP_STAGES.length-1?`0.5px solid ${D.border}`:"none"}},
+              h("div",{style:{width:28,height:28,borderRadius:"50%",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:600,
+                background:i===pullupStageIndex?D.accent:D.hint,color:i===pullupStageIndex?D.accentText:D.muted}},i+1),
+              h("div",null,
+                h("div",{style:{fontSize:13,fontWeight:500,color:D.text,marginBottom:2}},st.label),
+                h("div",{style:{fontSize:12,color:D.muted,lineHeight:1.5,marginBottom:4}},st.desc),
+                h("div",{style:{fontSize:11,color:D.accent,fontFamily:"'DM Mono',monospace"}},st.target)
+              )
+            )
+          )
+        )
+      ),
+
+      // ── Body Goals: Plan ───────────────────────────────────
+      bodyTab==="plan"&&h("div",null,
+        h("div",{style:{...card,display:"flex",gap:10,alignItems:"flex-start"}},
+          h("span",{style:{fontSize:18}},"⚡"),
+          h("div",{style:{fontSize:12,color:D.muted,lineHeight:1.6}},
+            h("strong",{style:{color:D.text,fontWeight:500}},"The one rule: "),
+            "Never go to failure. Stop 2 reps early every single set — this is what makes greasing the groove work, letting you do it 4× a day without recovery debt."
+          )
+        ),
+        ...BODY_GROUP_ORDER.map(grp=>
+          h("div",{key:grp},
+            h("div",{style:{...sHead,marginTop:8}},BODY_GROUP_LABELS[grp]),
+            ...Object.entries(BODY_EXERCISES).filter(([,ex])=>ex.group===grp).map(([exKey,ex])=>
+              h("div",{key:exKey,style:{...card,padding:0,overflow:"hidden"}},
+                h("div",{style:{display:"flex"}},
+                  h("div",{style:{width:110,height:110,flexShrink:0,background:D.hint}},
+                    h(BodyExerciseFigure,{exercise:exKey})
+                  ),
+                  h("div",{style:{flex:1,padding:"0.8rem 0.9rem"}},
+                    h("div",{style:{fontSize:13,fontWeight:500,color:D.text,marginBottom:4}},ex.label),
+                    h("div",{style:{fontSize:11,color:D.muted}},
+                      `Current target: ${currentTargets[exKey]>0?currentTargets[exKey]+(ex.unit==="sec"?"s":" reps"):"🔒 locked"}`)
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
+      )
+    ),
+
+    // ═══════════════════════════════════════════════════════
+    // LOG TAB — manual logging UI, full parity with bot.py write commands
+    // ═══════════════════════════════════════════════════════
+    !loading&&mainTab==="log"&&h("div",{className:"fade"},
+
+      logMsg&&h("div",{style:{...card,background:"#0f1f0a",border:`0.5px solid #2a4a1a`,color:D.accent,fontSize:12,textAlign:"center",padding:"8px 12px"}},logMsg),
+
+      // Date seeker — every action below operates on this date
+      h("div",{style:{display:"flex",alignItems:"center",gap:8,marginBottom:12}},
+        h("button",{onClick:()=>goDate(-1),style:{background:"transparent",border:`0.5px solid ${D.border}`,color:D.muted,borderRadius:8,padding:"4px 13px",fontSize:16,lineHeight:1}},"‹"),
+        h("input",{type:"date",value:viewDate,max:today,onChange:e=>e.target.value&&setVD(e.target.value),
+          style:{background:D.card,border:`0.5px solid ${D.border}`,color:D.text,borderRadius:8,padding:"5px 10px",fontSize:12,fontFamily:"inherit",flex:1,colorScheme:"dark"}}),
+        viewDate<today&&h("button",{onClick:()=>setVD(today),style:{fontSize:11,padding:"5px 12px",borderRadius:8,background:D.accent,color:D.accentText,border:"none",fontWeight:600,whiteSpace:"nowrap"}},"Today"),
+        h("button",{onClick:()=>goDate(1),disabled:viewDate>=today,style:{background:"transparent",border:`0.5px solid ${D.border}`,color:viewDate>=today?D.hint:D.muted,borderRadius:8,padding:"4px 13px",fontSize:16,lineHeight:1}},"›")
+      ),
+
+      // Log a meal — for the selected date
+      h("div",{style:card},
+        h("div",{style:sHead},viewDate===today?"Log a meal":`Log a meal — ${fmtDate(viewDate)}`),
+        h(LogMealForm,{onSubmit:submitMeal, busy:logBusy})
+      ),
+
+      // Log a workout — for the selected date
+      h("div",{style:card},
+        h("div",{style:sHead},viewDate===today?"Log a workout":`Log a workout — ${fmtDate(viewDate)}`),
+        h(LogWorkoutForm,{onSubmit:submitWorkout, busy:logBusy})
+      ),
+
+      // Presets
+      h("div",{style:card},
+        h("div",{style:sHead},"Presets"),
+        presets.length===0
+          ?h("div",{style:{fontSize:12,color:D.muted,marginBottom:10}},"No saved presets yet.")
+          :presets.map(p=>h("div",{key:p.name,style:{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`0.5px solid ${D.border}`}},
+              h("div",null,
+                h("div",{style:{fontSize:13,color:D.text,fontWeight:500}},titleCase(p.name)),
+                h("div",{style:{fontSize:11,color:D.muted,marginTop:2}},
+                  `${Math.round(p.cal)} kcal · ${Math.round(p.protein)}g pro · ${Math.round(p.carbs)}g carb · ${Math.round(p.fat)}g fat · ${Math.round(p.fiber||0)}g fiber`)
+              ),
+              h("div",{style:{display:"flex",gap:5,flexShrink:0}},
+                h("button",{onClick:()=>logFromPreset(p),disabled:logBusy,style:{background:D.accent,color:D.accentText,border:"none",borderRadius:7,padding:"5px 11px",fontSize:11,fontWeight:600}},"Log"),
+                h("button",{onClick:()=>deletePresetHandler(p.name),style:{background:"transparent",border:`0.5px solid #5a2a2a`,color:"#d08080",borderRadius:7,padding:"5px 9px",fontSize:11}},"🗑")
+              )
+            )),
+        h("div",{style:{marginTop:presets.length?12:0,paddingTop:presets.length?12:0,borderTop:presets.length?`0.5px solid ${D.border}`:"none"}},
+          h(SavePresetForm,{onSave:savePresetHandler, busy:logBusy})
+        )
+      ),
+
+      // Meals — edit/delete, for the selected date
+      h("div",{style:card},
+        h("div",{style:sHead},viewDate===today?"Today's meals":`Meals — ${fmtDate(viewDate)}`),
+        viewMeals.length===0
+          ?h(Empty,{icon:"🥗",text:"No meals logged on this day."})
+          :viewMeals.map(m=>h(LogMealRow,{
+              key:m.id, meal:m, editing:editMealId===m.id,
+              onEditStart:()=>setEditMealId(m.id), onEditCancel:()=>setEditMealId(null),
+              onSave:saveMealEdit, onDelete:deleteMeal
+            }))
+      ),
+
+      // Activities — delete, for the selected date
+      h("div",{style:card},
+        h("div",{style:sHead},viewDate===today?"Today's activities":`Activities — ${fmtDate(viewDate)}`),
+        acts.length===0
+          ?h(Empty,{icon:"🏃",text:"No activities logged on this day."})
+          :acts.map(a=>h("div",{key:a.id,style:{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 0",borderBottom:`0.5px solid ${D.border}`}},
+              h("div",{style:{display:"flex",alignItems:"center",gap:8}},
+                h("span",{style:{fontSize:16}},actIcon(a.activity)),
+                h("div",null,
+                  h("div",{style:{fontSize:13,color:D.text}},a.activity.charAt(0).toUpperCase()+a.activity.slice(1)),
+                  h("div",{style:{fontSize:11,color:D.muted,marginTop:2}},`${a.duration_minutes}min · ${a.intensity} · ${a.calories_burned} kcal`)
+                )
+              ),
+              h("button",{onClick:()=>deleteActivityEntry(a.id),style:{background:"transparent",border:`0.5px solid #5a2a2a`,color:"#d08080",borderRadius:7,padding:"4px 9px",fontSize:11,flexShrink:0}},"🗑")
+            ))
+      ),
+
+      // Quick actions — moved below the lists
+      h("div",{style:{...card,display:"flex",gap:8,flexWrap:"wrap"}},
+        h("button",{onClick:undoLastMeal,style:{flex:"1 1 auto",background:"transparent",border:`0.5px solid ${D.border}`,color:D.muted,borderRadius:8,padding:"8px",fontSize:12}},"↩️ Undo last meal"),
+        h("button",{onClick:copyPreviousDayHandler,disabled:logBusy,style:{flex:"1 1 auto",background:"transparent",border:`0.5px solid ${D.border}`,color:D.muted,borderRadius:8,padding:"8px",fontSize:12,opacity:logBusy?0.6:1}},"📋 Copy from previous day"),
+        h("button",{onClick:toggleCheatDay,style:{flex:"1 1 auto",background:cheatDays.has(viewDate)?"#6b4fa0":"transparent",border:`0.5px solid ${cheatDays.has(viewDate)?"#6b4fa0":D.border}`,color:cheatDays.has(viewDate)?"#fff":D.muted,borderRadius:8,padding:"8px",fontSize:12}},
+          cheatDays.has(viewDate)?"❄️ Remove nutrition cheat day":`❄️ Nutrition cheat day (${freezeBal} left)`),
+        h("button",{onClick:toggleActCheatDay,style:{flex:"1 1 auto",background:actCheatDays.has(viewDate)?"#6b4fa0":"transparent",border:`0.5px solid ${actCheatDays.has(viewDate)?"#6b4fa0":D.border}`,color:actCheatDays.has(viewDate)?"#fff":D.muted,borderRadius:8,padding:"8px",fontSize:12}},
+          actCheatDays.has(viewDate)?"❄️ Remove activity rest day":`❄️ Activity rest day (${actFreezeBal} left)`)
+      ),
+
+      h("div",{style:{marginTop:4}},
+        h("div",{style:{display:"flex",gap:8,marginBottom:todaySummary?8:0}},
+          h("button",{onClick:fetchTodaySummary,disabled:summaryBusy,style:{flex:1,background:D.card,border:`0.5px solid ${D.border}`,color:D.text,borderRadius:8,padding:"9px",fontSize:12,fontWeight:500,opacity:summaryBusy?0.6:1}},
+            summaryBusy?"Loading…":"Today"),
+          h("button",{
+            onClick:()=>{
+              if(!todaySummary) return;
+              if(navigator.clipboard){
+                navigator.clipboard.writeText(todaySummary).then(()=>flashMsg("Copied!")).catch(()=>legacyCopy(todaySummary,flashMsg));
+              } else { legacyCopy(todaySummary,flashMsg); }
+            },
+            disabled:!todaySummary,
+            style:{flex:1,background:D.card,border:`0.5px solid ${D.border}`,color:todaySummary?D.text:D.hint,borderRadius:8,padding:"9px",fontSize:12,fontWeight:500,opacity:todaySummary?1:0.4}
+          },"Copy")
+        ),
+        todaySummary&&h("div",{style:{background:D.surface,border:`0.5px solid ${D.border}`,borderRadius:8,padding:"10px 12px",fontSize:12,color:D.muted,lineHeight:1.6,wordBreak:"break-word"}},
+          todaySummary)
+      )
+    ),
+
+    // ═══════════════════════════════════════════════════════
     // SUMMARY TAB
     // ═══════════════════════════════════════════════════════
     !loading&&mainTab==="summary"&&h("div",{className:"fade"},
-      // Both streaks
-      h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}},
-        h("div",{style:{...card,marginBottom:0,borderColor:nutStreak>0?"#3a5a20":D.border}},
-          h("div",{style:{fontSize:11,color:D.muted,marginBottom:6}},"🥗 Nutrition streak"),
-          h("div",{style:{fontSize:28,fontWeight:600,color:nutStreak>0?COLORS.protein:D.muted}},
-            nutStreak,h("span",{style:{fontSize:12,fontWeight:400,color:D.muted,marginLeft:3}},"days")),
-          h("div",{style:{fontSize:11,color:D.muted,marginTop:3}},
-            `❄️ ${freezeBal}/2 freezes · good day = ≥2 meals + ≥87g pro`)
+      // All 3 streaks
+      h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:12}},
+        h("div",{style:{...card,marginBottom:0,padding:"0.8rem 0.7rem",borderColor:nutStreak>0?"#3a5a20":D.border}},
+          h("div",{style:{fontSize:10,color:D.muted,marginBottom:5}},"🥗 Nutrition"),
+          h("div",{style:{fontSize:21,fontWeight:600,color:nutStreak>0?COLORS.protein:D.muted}},
+            nutStreak,h("span",{style:{fontSize:11,fontWeight:400,color:D.muted,marginLeft:2}},"d")),
+          h("div",{style:{fontSize:10,color:D.muted,marginTop:2}},`❄️${freezeBal}/2`)
         ),
-        h("div",{style:{...card,marginBottom:0,borderColor:actStreak>0?"#3a2a5a":D.border}},
-          h("div",{style:{fontSize:11,color:D.muted,marginBottom:6}},"🏃 Activity streak"),
-          h("div",{style:{fontSize:28,fontWeight:600,color:actStreak>0?COLORS.act:D.muted}},
-            actStreak,h("span",{style:{fontSize:12,fontWeight:400,color:D.muted,marginLeft:3}},"days")),
-          h("div",{style:{fontSize:11,color:D.muted,marginTop:3}},
-            `❄️ ${actFreezeBal}/2 freezes · valid = ≥150 kcal burned`)
+        h("div",{style:{...card,marginBottom:0,padding:"0.8rem 0.7rem",borderColor:actStreak>0?"#3a2a5a":D.border}},
+          h("div",{style:{fontSize:10,color:D.muted,marginBottom:5}},"🏃 Activity"),
+          h("div",{style:{fontSize:21,fontWeight:600,color:actStreak>0?COLORS.act:D.muted}},
+            actStreak,h("span",{style:{fontSize:11,fontWeight:400,color:D.muted,marginLeft:2}},"d")),
+          h("div",{style:{fontSize:10,color:D.muted,marginTop:2}},`❄️${actFreezeBal}/2`)
+        ),
+        h("div",{style:{...card,marginBottom:0,padding:"0.8rem 0.7rem",borderColor:bodyStreak>0?"#5a4a1a":D.border}},
+          h("div",{style:{fontSize:10,color:D.muted,marginBottom:5}},"💪 Body"),
+          h("div",{style:{fontSize:21,fontWeight:600,color:bodyStreak>0?D.accent:D.muted}},
+            bodyStreak,h("span",{style:{fontSize:11,fontWeight:400,color:D.muted,marginLeft:2}},"d")),
+          h("div",{style:{fontSize:10,color:D.muted,marginTop:2}},`❄️${bodyFreezeBal}/2`)
         )
       ),
 
@@ -965,9 +2100,20 @@ function App(){
             )
           )
         ),
-        h("div",{style:{fontSize:12,color:D.muted,textAlign:"center",marginTop:10}},
-          `${Math.round(totals.cal)} / ${TARGETS.cal} kcal consumed · `+
-          `${Math.round(totals.protein)}g protein`)
+        // Done / left numbers — same footprint as the old single sentence, now covers all 5 metrics
+        h("div",{style:{display:"flex",flexWrap:"wrap",gap:5,justifyContent:"center",marginTop:10}},
+          ...[
+            {label:"Cal",  done:totals.cal,    target:TARGETS.cal,    unit:""},
+            {label:"Pro",  done:totals.protein,target:TARGETS.protein,unit:"g"},
+            {label:"Carb", done:totals.carbs,  target:TARGETS.carbs,  unit:"g"},
+            {label:"Fat",  done:totals.fat,    target:TARGETS.fat,    unit:"g"},
+            {label:"Fiber",done:totals.fiber,  target:TARGETS.fiber,  unit:"g"},
+          ].map(({label,done,target,unit})=>{
+            const left=Math.max(Math.round(target-done),0);
+            return h("span",{key:label,style:{fontSize:10,color:D.muted,background:D.surface,borderRadius:7,padding:"3px 8px"}},
+              `${label} ${Math.round(done)}${unit} done · ${left}${unit} left`);
+          })
+        )
       ),
 
       // Activity summary
@@ -988,6 +2134,20 @@ function App(){
                   `${a.calories_burned} kcal`)
               ))
           )
+      ),
+
+      // Body Goals summary
+      h("div",{style:card},
+        h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}},
+          h("div",{style:{...sHead,marginBottom:0}},"Today — body goals"),
+          h("span",{style:{fontSize:11,color:D.muted}},WEEK_BLOCKS[blockIndex].label)
+        ),
+        h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center"}},
+          h("div",{style:{fontSize:22,fontWeight:600,color:viewBodyCompletion>=BODY_GOOD_DAY_PCT?D.accent:D.text}},
+            Math.round(viewBodyCompletion*100),h("span",{style:{fontSize:12,color:D.muted,fontWeight:400,marginLeft:2}},"% complete")),
+          h("div",{style:{fontSize:11,color:D.muted,textAlign:"right"}},
+            `💪 ${bodyStreak}d streak`,h("br"),`🆙 ${PULLUP_STAGES[pullupStageIndex].label}`)
+        )
       ),
 
       // Net calories card
