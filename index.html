@@ -26,6 +26,7 @@ button{font-family:'DM Sans',sans-serif;cursor:pointer}
 </head>
 <body>
 <div id="root" style="max-width:680px;margin:0 auto;padding:1.25rem 1rem;min-height:100vh"></div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
 <script>
@@ -33,7 +34,11 @@ const { useState, useEffect, useCallback, useMemo, createElement: h, Fragment } 
 
 const URL_BASE = "https://uikwwjmzrrxdvwmyguwv.supabase.co/rest/v1";
 const ANON_KEY = "sb_publishable_w9mMEmA0mGbQRs7s8ng76w_FX8hqqPd";
-const HDRS     = { "Content-Type":"application/json", apikey: ANON_KEY, Authorization:"Bearer "+ANON_KEY };
+const SUPABASE_URL = "https://uikwwjmzrrxdvwmyguwv.supabase.co";
+const _sb = supabase.createClient(SUPABASE_URL, ANON_KEY, {auth:{persistSession:true,autoRefreshToken:true}});
+let _session = null;
+const getHDRS = () => ({ "Content-Type":"application/json", apikey:ANON_KEY, Authorization:"Bearer "+(_session?.access_token||ANON_KEY) });
+const getUserId = () => _session?.user?.id||null;
 
 const TARGETS  = { cal:1850, protein:145, carbs:160, fat:55, fiber:30 };
 const ACT_MIN  = 150;   // kcal to count as valid activity day
@@ -361,40 +366,40 @@ function displayTime(t){
 
 // ── API ────────────────────────────────────────────────────────
 async function apiFetch(from, to){
-  const r = await fetch(`${URL_BASE}/meals?meal_date=gte.${from}&meal_date=lte.${to}&order=logged_at.asc`,{headers:HDRS});
+  const r = await fetch(`${URL_BASE}/meals?meal_date=gte.${from}&meal_date=lte.${to}&order=logged_at.asc`,{headers:getHDRS()});
   if(!r.ok) throw new Error(r.status+" "+await r.text());
   return r.json();
 }
 async function apiFetchActivities(from, to){
-  const r = await fetch(`${URL_BASE}/activities?activity_date=gte.${from}&activity_date=lte.${to}&order=logged_at.asc`,{headers:HDRS});
+  const r = await fetch(`${URL_BASE}/activities?activity_date=gte.${from}&activity_date=lte.${to}&order=logged_at.asc`,{headers:getHDRS()});
   if(!r.ok) return [];
   return r.json();
 }
 async function apiFetchCheatDays(){
   try{
-    const r = await fetch(`${URL_BASE}/cheat_days?order=date.desc`,{headers:HDRS});
+    const r = await fetch(`${URL_BASE}/cheat_days?order=date.desc`,{headers:getHDRS()});
     if(!r.ok) return new Set();
     return new Set((await r.json()).map(x=>x.date));
   } catch{ return new Set(); }
 }
 async function apiFetchActCheatDays(){
   try{
-    const r = await fetch(`${URL_BASE}/act_cheat_days?order=date.desc`,{headers:HDRS});
+    const r = await fetch(`${URL_BASE}/act_cheat_days?order=date.desc`,{headers:getHDRS()});
     if(!r.ok) return new Set();
     return new Set((await r.json()).map(x=>x.date));
   } catch{ return new Set(); }
 }
 async function apiAddActCheatDay(date){
-  const r = await fetch(`${URL_BASE}/act_cheat_days`,{method:"POST",headers:{...HDRS,"Prefer":"return=minimal"},body:JSON.stringify({date})});
+  const r = await fetch(`${URL_BASE}/act_cheat_days`,{method:"POST",headers:{...getHDRS(),"Prefer":"return=minimal"},body:JSON.stringify({date,user_id:getUserId()})});
   if(!r.ok) throw new Error(r.status+" "+await r.text());
 }
 async function apiRemoveActCheatDay(date){
-  const r = await fetch(`${URL_BASE}/act_cheat_days?date=eq.${date}`,{method:"DELETE",headers:{...HDRS,"Prefer":"return=minimal"}});
+  const r = await fetch(`${URL_BASE}/act_cheat_days?date=eq.${date}`,{method:"DELETE",headers:{...getHDRS(),"Prefer":"return=minimal"}});
   if(!r.ok) throw new Error(r.status+" "+await r.text());
 }
 async function apiFetchSettings(){
   try{
-    const r = await fetch(`${URL_BASE}/settings`,{headers:HDRS});
+    const r = await fetch(`${URL_BASE}/settings`,{headers:getHDRS()});
     if(!r.ok) return {};
     const rows = await r.json();
     return Object.fromEntries(rows.map(x=>[x.key, x.value]));
@@ -402,7 +407,7 @@ async function apiFetchSettings(){
 }
 async function apiFetchSteps(from, to){
   try{
-    const r = await fetch(`${URL_BASE}/daily_steps?step_date=gte.${from}&step_date=lte.${to}&order=step_date.asc`,{headers:HDRS});
+    const r = await fetch(`${URL_BASE}/daily_steps?step_date=gte.${from}&step_date=lte.${to}&order=step_date.asc`,{headers:getHDRS()});
     if(!r.ok) return {};
     const rows = await r.json();
     return Object.fromEntries(rows.map(x=>[x.step_date, x.steps]));
@@ -410,74 +415,74 @@ async function apiFetchSteps(from, to){
 }
 async function apiFetchBodySets(from, to){
   try{
-    const r = await fetch(`${URL_BASE}/body_sets?set_date=gte.${from}&set_date=lte.${to}&order=logged_at.asc`,{headers:HDRS});
+    const r = await fetch(`${URL_BASE}/body_sets?set_date=gte.${from}&set_date=lte.${to}&order=logged_at.asc`,{headers:getHDRS()});
     if(!r.ok) return [];
     return r.json();
   } catch{ return []; }
 }
 async function apiInsertBodySet(date, exercise, value){
-  const r = await fetch(`${URL_BASE}/body_sets`,{method:"POST",headers:{...HDRS,"Prefer":"return=representation"},
-    body:JSON.stringify({set_date:date, exercise, value})});
+  const r = await fetch(`${URL_BASE}/body_sets`,{method:"POST",headers:{...getHDRS(),"Prefer":"return=representation"},
+    body:JSON.stringify({set_date:date, exercise, value, user_id:getUserId()})});
   if(!r.ok) throw new Error(r.status+" "+await r.text());
   return r.json();
 }
 async function apiUpsertSetting(key, value){
   try{
-    await fetch(`${URL_BASE}/settings`,{method:"POST",headers:{...HDRS,"Prefer":"resolution=merge-duplicates"},
-      body:JSON.stringify({key, value:String(value)})});
+    await fetch(`${URL_BASE}/settings`,{method:"POST",headers:{...getHDRS(),"Prefer":"resolution=merge-duplicates"},
+      body:JSON.stringify({key, value:String(value), user_id:getUserId()})});
   } catch{}
 }
 async function apiInsert(meal){
-  const r = await fetch(`${URL_BASE}/meals`,{method:"POST",headers:{...HDRS,"Prefer":"return=representation"},body:JSON.stringify(meal)});
+  const r = await fetch(`${URL_BASE}/meals`,{method:"POST",headers:{...getHDRS(),"Prefer":"return=representation"},body:JSON.stringify({...meal,user_id:getUserId()})});
   if(!r.ok) throw new Error(r.status+" "+await r.text());
   return r.json();
 }
 async function apiDeleteToday(){
-  const r = await fetch(`${URL_BASE}/meals?meal_date=eq.${todayStr()}`,{method:"DELETE",headers:{...HDRS,"Prefer":"return=minimal"}});
+  const r = await fetch(`${URL_BASE}/meals?meal_date=eq.${todayStr()}`,{method:"DELETE",headers:{...getHDRS(),"Prefer":"return=minimal"}});
   if(!r.ok) throw new Error(r.status+" "+await r.text());
 }
-// ── Log tab — write functions (mirrors bot.py /edit /delete /undo /save /presets /unsave /log /copy /cheatday /workout /delworkout) ──
+// ── Log tab — write functions ──
 async function apiUpdateMeal(id, updates){
-  const r = await fetch(`${URL_BASE}/meals?id=eq.${id}`,{method:"PATCH",headers:{...HDRS,"Prefer":"return=minimal"},body:JSON.stringify(updates)});
+  const r = await fetch(`${URL_BASE}/meals?id=eq.${id}`,{method:"PATCH",headers:{...getHDRS(),"Prefer":"return=minimal"},body:JSON.stringify(updates)});
   if(!r.ok) throw new Error(r.status+" "+await r.text());
 }
 async function apiDeleteMealById(id){
-  const r = await fetch(`${URL_BASE}/meals?id=eq.${id}`,{method:"DELETE",headers:{...HDRS,"Prefer":"return=minimal"}});
+  const r = await fetch(`${URL_BASE}/meals?id=eq.${id}`,{method:"DELETE",headers:{...getHDRS(),"Prefer":"return=minimal"}});
   if(!r.ok) throw new Error(r.status+" "+await r.text());
 }
 async function apiInsertActivity(act){
-  const r = await fetch(`${URL_BASE}/activities`,{method:"POST",headers:{...HDRS,"Prefer":"return=representation"},body:JSON.stringify(act)});
+  const r = await fetch(`${URL_BASE}/activities`,{method:"POST",headers:{...getHDRS(),"Prefer":"return=representation"},body:JSON.stringify({...act,user_id:getUserId()})});
   if(!r.ok) throw new Error(r.status+" "+await r.text());
   return r.json();
 }
 async function apiDeleteActivityById(id){
-  const r = await fetch(`${URL_BASE}/activities?id=eq.${id}`,{method:"DELETE",headers:{...HDRS,"Prefer":"return=minimal"}});
+  const r = await fetch(`${URL_BASE}/activities?id=eq.${id}`,{method:"DELETE",headers:{...getHDRS(),"Prefer":"return=minimal"}});
   if(!r.ok) throw new Error(r.status+" "+await r.text());
 }
 function titleCase(s){ return s.replace(/\b\w/g, c=>c.toUpperCase()); }
 async function apiSavePreset(name, macros){
-  const r = await fetch(`${URL_BASE}/presets`,{method:"POST",headers:{...HDRS,"Prefer":"resolution=merge-duplicates,return=representation"},
-    body:JSON.stringify({name:name.toLowerCase(), ...macros})});
+  const r = await fetch(`${URL_BASE}/presets`,{method:"POST",headers:{...getHDRS(),"Prefer":"resolution=merge-duplicates,return=representation"},
+    body:JSON.stringify({name:name.toLowerCase(), ...macros, user_id:getUserId()})});
   if(!r.ok) throw new Error(r.status+" "+await r.text());
   return r.json();
 }
 async function apiListPresets(){
   try{
-    const r = await fetch(`${URL_BASE}/presets?order=name.asc`,{headers:HDRS});
+    const r = await fetch(`${URL_BASE}/presets?order=name.asc`,{headers:getHDRS()});
     if(!r.ok) return [];
     return r.json();
   } catch{ return []; }
 }
 async function apiDeletePreset(name){
-  const r = await fetch(`${URL_BASE}/presets?name=eq.${name.toLowerCase()}`,{method:"DELETE",headers:{...HDRS,"Prefer":"return=minimal"}});
+  const r = await fetch(`${URL_BASE}/presets?name=eq.${name.toLowerCase()}`,{method:"DELETE",headers:{...getHDRS(),"Prefer":"return=minimal"}});
   if(!r.ok) throw new Error(r.status+" "+await r.text());
 }
 async function apiAddCheatDay(date){
-  const r = await fetch(`${URL_BASE}/cheat_days`,{method:"POST",headers:{...HDRS,"Prefer":"return=minimal"},body:JSON.stringify({date})});
+  const r = await fetch(`${URL_BASE}/cheat_days`,{method:"POST",headers:{...getHDRS(),"Prefer":"return=minimal"},body:JSON.stringify({date,user_id:getUserId()})});
   if(!r.ok) throw new Error(r.status+" "+await r.text());
 }
 async function apiRemoveCheatDay(date){
-  const r = await fetch(`${URL_BASE}/cheat_days?date=eq.${date}`,{method:"DELETE",headers:{...HDRS,"Prefer":"return=minimal"}});
+  const r = await fetch(`${URL_BASE}/cheat_days?date=eq.${date}`,{method:"DELETE",headers:{...getHDRS(),"Prefer":"return=minimal"}});
   if(!r.ok) throw new Error(r.status+" "+await r.text());
 }
 async function apiCopyPreviousDay(targetDate){
@@ -928,6 +933,185 @@ function SavePresetForm({onSave, busy}){
   );
 }
 
+// ── Auth Screen ────────────────────────────────────────────────
+function AuthScreen(){
+  const [email, setEmail]   = useState("");
+  const [pw, setPw]         = useState("");
+  const [mode, setMode]     = useState("login");
+  const [busy, setBusy]     = useState(false);
+  const [showPw, setShowPw] = useState(false);
+  const [err, setErr]       = useState("");
+
+  async function handleGoogle(){
+    setBusy(true); setErr("");
+    const {error} = await _sb.auth.signInWithOAuth({provider:"google",options:{redirectTo:window.location.origin}});
+    if(error){ setErr(error.message); setBusy(false); }
+  }
+  async function handleEmail(e){
+    e.preventDefault(); setBusy(true); setErr("");
+    const fn = mode==="login" ? _sb.auth.signInWithPassword.bind(_sb.auth) : _sb.auth.signUp.bind(_sb.auth);
+    const {error} = await fn({email, password:pw});
+    if(error){ setErr(error.message); setBusy(false); }
+  }
+  const inp = {background:"#181816",border:"0.5px solid #2a2a26",borderRadius:10,padding:"11px 14px",color:"#f0efe8",fontSize:14,outline:"none",width:"100%",fontFamily:"inherit"};
+  return h("div",{style:{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:24,padding:"0 16px"}},
+    h("div",{style:{textAlign:"center",marginBottom:4}},
+      h("div",{style:{fontSize:38,marginBottom:10}},"🥗"),
+      h("div",{style:{fontSize:24,fontWeight:700,color:"#f0efe8",letterSpacing:"-0.02em"}},"NutriTrack"),
+      h("div",{style:{fontSize:13,color:"#666660",marginTop:5}},"Your personal health tracker")
+    ),
+    h("div",{style:{background:"#1e1e1b",border:"0.5px solid #2a2a26",borderRadius:18,padding:24,width:"100%",maxWidth:360,display:"flex",flexDirection:"column",gap:14}},
+      h("button",{onClick:handleGoogle,disabled:busy,style:{background:"#fff",color:"#111",border:"none",borderRadius:10,padding:"12px 18px",fontSize:13,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center",gap:10,cursor:"pointer",opacity:busy?0.6:1}},
+        h("svg",{width:16,height:16,viewBox:"0 0 24 24"},
+          h("path",{fill:"#4285f4",d:"M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"}),
+          h("path",{fill:"#34a853",d:"M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"}),
+          h("path",{fill:"#fbbc05",d:"M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"}),
+          h("path",{fill:"#ea4335",d:"M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"})
+        ),
+        busy?"Signing in…":"Continue with Google"
+      ),
+      h("div",{style:{display:"flex",alignItems:"center",gap:10}},
+        h("div",{style:{flex:1,height:"0.5px",background:"#2a2a26"}}),
+        h("span",{style:{fontSize:11,color:"#555"}},"or"),
+        h("div",{style:{flex:1,height:"0.5px",background:"#2a2a26"}})
+      ),
+      h("form",{onSubmit:handleEmail,style:{display:"flex",flexDirection:"column",gap:10}},
+        h("input",{type:"email",placeholder:"Email",value:email,onChange:e=>setEmail(e.target.value),required:true,style:inp}),
+        h("div",{style:{position:"relative"}},
+          h("input",{type:showPw?"text":"password",placeholder:"Password",value:pw,onChange:e=>setPw(e.target.value),required:true,style:{...inp,paddingRight:52}}),
+          h("button",{type:"button",onClick:()=>setShowPw(s=>!s),style:{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:"#555",fontSize:11,cursor:"pointer"}},showPw?"Hide":"Show")
+        ),
+        err&&h("div",{style:{fontSize:12,color:"#f08080",background:"#1a0808",borderRadius:8,padding:"8px 12px"}},err),
+        h("button",{type:"submit",disabled:busy,style:{background:"#c8f060",color:"#1a2a04",border:"none",borderRadius:10,padding:"12px",fontSize:14,fontWeight:700,cursor:"pointer",opacity:busy?0.6:1}},
+          busy?"…":mode==="login"?"Sign in":"Create account"),
+        h("button",{type:"button",onClick:()=>{setMode(m=>m==="login"?"signup":"login");setErr("");},style:{background:"none",border:"none",color:"#555",cursor:"pointer",fontSize:12,textDecoration:"underline"}},
+          mode==="login"?"Don't have an account? Sign up":"Already have an account? Sign in")
+      )
+    )
+  );
+}
+
+// ── Onboarding Screen ──────────────────────────────────────────
+function OnboardingScreen({onDone}){
+  const [sel, setSel] = useState({nutrition:true,activity:true,body:true});
+  const [busy, setBusy] = useState(false);
+  function toggle(k){ setSel(s=>({...s,[k]:!s[k]})); }
+  async function finish(){
+    if(!sel.nutrition&&!sel.activity&&!sel.body) return;
+    setBusy(true);
+    await Promise.all([
+      apiUpsertSetting("track_nutrition", sel.nutrition?"1":"0"),
+      apiUpsertSetting("track_activity",  sel.activity?"1":"0"),
+      apiUpsertSetting("track_body",      sel.body?"1":"0"),
+      apiUpsertSetting("onboarded","1"),
+    ]);
+    onDone();
+  }
+  const MODS = [
+    {k:"nutrition",icon:"🥗",label:"Nutrition",desc:"Track meals, macros & calories"},
+    {k:"activity", icon:"🏃",label:"Activity", desc:"Log workouts & calories burned"},
+    {k:"body",     icon:"💪",label:"Body Goals",desc:"Track strength & fitness milestones"},
+  ];
+  return h("div",{style:{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:28,padding:"32px 16px"}},
+    h("div",{style:{textAlign:"center"}},
+      h("div",{style:{fontSize:42,marginBottom:10}},"👋"),
+      h("div",{style:{fontSize:22,fontWeight:700,color:"#f0efe8"}},"What do you want to track?"),
+      h("div",{style:{fontSize:13,color:"#666660",marginTop:6}},"You can change this later in Profile")
+    ),
+    h("div",{style:{display:"flex",flexDirection:"column",gap:10,width:"100%",maxWidth:340}},
+      ...MODS.map(({k,icon,label,desc})=>
+        h("button",{key:k,onClick:()=>toggle(k),style:{background:sel[k]?"#1e1e1b":"#131310",border:`1.5px solid ${sel[k]?"#c8f060":"#2a2a26"}`,borderRadius:14,padding:"14px 16px",display:"flex",alignItems:"center",gap:12,cursor:"pointer",textAlign:"left",transition:"border-color 0.15s"}},
+          h("div",{style:{fontSize:26,width:32,textAlign:"center",flexShrink:0}},icon),
+          h("div",{style:{flex:1}},
+            h("div",{style:{fontSize:14,fontWeight:600,color:sel[k]?"#f0efe8":"#555"}},label),
+            h("div",{style:{fontSize:11,color:"#555",marginTop:2}},desc)
+          ),
+          h("div",{style:{width:20,height:20,borderRadius:"50%",border:`2px solid ${sel[k]?"#c8f060":"#2a2a26"}`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}},
+            sel[k]&&h("div",{style:{width:10,height:10,borderRadius:"50%",background:"#c8f060"}})
+          )
+        )
+      )
+    ),
+    h("button",{onClick:finish,disabled:busy||(!sel.nutrition&&!sel.activity&&!sel.body),style:{background:"#c8f060",color:"#1a2a04",border:"none",borderRadius:12,padding:"14px 48px",fontSize:15,fontWeight:700,cursor:"pointer",opacity:busy?0.7:1}},
+      busy?"Setting up…":"Get started →")
+  );
+}
+
+// ── Profile Modal ──────────────────────────────────────────────
+function ProfileModal({settings, userEmail, onClose, onSave}){
+  const [tgt, setTgt] = useState({
+    cal:     settings.cal_target||"1850",
+    protein: settings.protein_target||"145",
+    carbs:   settings.carbs_target||"160",
+    fat:     settings.fat_target||"55",
+    fiber:   settings.fiber_target||"30",
+  });
+  const [mods, setMods] = useState({
+    nutrition: settings.track_nutrition!=="0",
+    activity:  settings.track_activity!=="0",
+    body:      settings.track_body!=="0",
+  });
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  async function save(){
+    setBusy(true);
+    await Promise.all([
+      apiUpsertSetting("cal_target",     tgt.cal),
+      apiUpsertSetting("protein_target", tgt.protein),
+      apiUpsertSetting("carbs_target",   tgt.carbs),
+      apiUpsertSetting("fat_target",     tgt.fat),
+      apiUpsertSetting("fiber_target",   tgt.fiber),
+      apiUpsertSetting("track_nutrition",mods.nutrition?"1":"0"),
+      apiUpsertSetting("track_activity", mods.activity?"1":"0"),
+      apiUpsertSetting("track_body",     mods.body?"1":"0"),
+    ]);
+    setBusy(false); setSaved(true);
+    setTimeout(()=>{ setSaved(false); onSave(); }, 700);
+  }
+
+  const inp = {background:"#181816",border:"0.5px solid #2a2a26",borderRadius:8,padding:"9px 12px",color:"#f0efe8",fontSize:13,width:"100%",outline:"none",fontFamily:"inherit"};
+  return h("div",{style:{position:"fixed",inset:0,zIndex:2000,background:"rgba(0,0,0,0.72)",display:"flex",alignItems:"flex-end",justifyContent:"center"},onClick:e=>{if(e.target===e.currentTarget)onClose();}},
+    h("div",{style:{background:"#181816",borderRadius:"20px 20px 0 0",width:"100%",maxWidth:540,maxHeight:"90vh",overflowY:"auto",paddingBottom:32}},
+      h("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"16px 18px",borderBottom:"0.5px solid #2a2a26",position:"sticky",top:0,background:"#181816",zIndex:1}},
+        h("div",null,
+          h("div",{style:{fontSize:15,fontWeight:700,color:"#f0efe8"}},"Profile & Settings"),
+          userEmail&&h("div",{style:{fontSize:11,color:"#555",marginTop:2}},userEmail)
+        ),
+        h("button",{onClick:onClose,style:{background:"none",border:"none",color:"#444",fontSize:22,cursor:"pointer",padding:"0 4px",lineHeight:1}},"×")
+      ),
+      h("div",{style:{padding:18,display:"flex",flexDirection:"column",gap:20}},
+        h("div",null,
+          h("div",{style:{fontSize:11,color:"#555",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:10}},"Modules"),
+          h("div",{style:{display:"flex",flexDirection:"column",gap:8}},
+            ...[["nutrition","🥗","Nutrition"],["activity","🏃","Activity"],["body","💪","Body Goals"]].map(([k,icon,label])=>
+              h("label",{key:k,style:{display:"flex",alignItems:"center",justifyContent:"space-between",background:"#1e1e1b",border:"0.5px solid #2a2a26",borderRadius:10,padding:"11px 14px",cursor:"pointer"}},
+                h("span",{style:{fontSize:13,color:"#f0efe8"}},icon+" "+label),
+                h("input",{type:"checkbox",checked:mods[k],onChange:()=>setMods(m=>({...m,[k]:!m[k]})),style:{accentColor:"#c8f060",width:16,height:16}})
+              )
+            )
+          )
+        ),
+        h("div",null,
+          h("div",{style:{fontSize:11,color:"#555",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:10}},"Daily Targets"),
+          h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}},
+            ...[["cal","Calories (kcal)"],["protein","Protein (g)"],["carbs","Carbs (g)"],["fat","Fat (g)"],["fiber","Fiber (g)"]].map(([k,label])=>
+              h("div",{key:k},
+                h("div",{style:{fontSize:11,color:"#555",marginBottom:4}},label),
+                h("input",{type:"number",value:tgt[k],min:0,onChange:e=>setTgt(t=>({...t,[k]:e.target.value})),style:inp})
+              )
+            )
+          )
+        ),
+        h("button",{onClick:save,disabled:busy||saved,style:{background:saved?"#2a4a0f":"#c8f060",color:"#1a2a04",border:"none",borderRadius:10,padding:13,fontSize:14,fontWeight:700,cursor:"pointer",transition:"background 0.2s"}},
+          saved?"✓ Saved":busy?"Saving…":"Save changes"),
+        h("button",{onClick:()=>_sb.auth.signOut(),style:{background:"none",border:"0.5px solid #3a1a1a",color:"#f08080",borderRadius:10,padding:12,fontSize:13,cursor:"pointer"}},
+          "Sign out")
+      )
+    )
+  );
+}
+
 // ── Day Detail Modal ───────────────────────────────────────────
 function DayDetailModal({date, onClose, onNav, maxDate, byDate, actByDate, bodyByDate, stepsData, cheatDays, actCheatDays, currentTargets}){
   const meals = byDate[date]||[];
@@ -1020,6 +1204,8 @@ function DayDetailModal({date, onClose, onNav, maxDate, byDate, actByDate, bodyB
 
 // ── App ────────────────────────────────────────────────────────
 function App(){
+  const [appPhase,    setAppPhase]    = useState("booting"); // "booting"|"auth"|"onboarding"|"app"
+  const [showProfile, setShowProfile] = useState(false);
   const [mainTab,  setMainTabRaw]  = useState(()=>localStorage.getItem("tab_main")||"summary");
   const [nutTab,   setNutTabRaw]   = useState(()=>{ const s=localStorage.getItem("tab_nut"); return (s==="history"||s==="sources")? s:"history"; });
   const [actTab,   setActTabRaw]   = useState(()=>"history");
@@ -1078,8 +1264,8 @@ function App(){
     try{
       const d = todayStr();
       const [mR, aR] = await Promise.all([
-        fetch(`${URL_BASE}/meals?meal_date=eq.${d}&order=logged_at.asc`,{headers:HDRS}),
-        fetch(`${URL_BASE}/activities?activity_date=eq.${d}`,{headers:HDRS})
+        fetch(`${URL_BASE}/meals?meal_date=eq.${d}&order=logged_at.asc`,{headers:getHDRS()}),
+        fetch(`${URL_BASE}/activities?activity_date=eq.${d}`,{headers:getHDRS()})
       ]);
       const meals = mR.ok ? await mR.json() : [];
       const activities = aR.ok ? await aR.json() : [];
@@ -1107,6 +1293,21 @@ function App(){
   const refresh = useCallback(()=>setTick(t=>t+1),[]);
   window.__refresh = refresh;
 
+  // ── Auth: check session on mount, listen for changes ──
+  useEffect(()=>{
+    _sb.auth.getSession().then(({data:{session}})=>{
+      _session = session;
+      if(!session){ setAppPhase("auth"); return; }
+      refresh();
+    });
+    const {data:{subscription}} = _sb.auth.onAuthStateChange((event,session)=>{
+      _session = session;
+      if(!session){ setAppPhase("auth"); return; }
+      if(event==="SIGNED_IN"||event==="TOKEN_REFRESHED") refresh();
+    });
+    return ()=>subscription.unsubscribe();
+  },[]);
+
   function navMonth(setter, dir){
     setter(m=>{
       const [y,mo]=m.split("-").map(Number), n=mo+dir;
@@ -1120,6 +1321,7 @@ function App(){
   },[]);
 
   useEffect(()=>{
+    if(!_session) return; // wait for auth
     (async()=>{
       setLoading(true); setError(null);
       const today = todayStr();
@@ -1207,7 +1409,24 @@ function App(){
           }
         }
 
+        // Update effective targets from user settings
+        Object.assign(TARGETS, {
+          cal:     parseInt(sett.cal_target||"1850"),
+          protein: parseInt(sett.protein_target||"145"),
+          carbs:   parseInt(sett.carbs_target||"160"),
+          fat:     parseInt(sett.fat_target||"55"),
+          fiber:   parseInt(sett.fiber_target||"30"),
+        });
+
         setSettings({...sett});
+
+        // Check onboarding — auto-migrate legacy data silently
+        if(sett.onboarded!=="1"){
+          try{ await _sb.rpc("migrate_legacy_data"); }catch{}
+          setAppPhase("onboarding");
+          return;
+        }
+        setAppPhase("app");
       } catch(e){ setError(e.message); }
       finally{ setLoading(false); }
     })();
@@ -1358,8 +1577,26 @@ function App(){
   const avgDayPct={};
   topSources.forEach(([label])=>{ const active=Object.keys(daySourceMap).filter(d=>daySourceMap[d][label]&&dayTotalMap[d]>0); avgDayPct[label]=active.length?Math.round(active.reduce((s,d)=>s+(daySourceMap[d][label]/dayTotalMap[d])*100,0)/active.length):0; });
 
+  const trackNutrition = settings.track_nutrition!=="0";
+  const trackActivity  = settings.track_activity!=="0";
+  const trackBody      = settings.track_body!=="0";
+  const tabCount = 2 + (trackNutrition?1:0) + (trackActivity?1:0) + (trackBody?1:0);
+
   // ── render ─────────────────────────────────────────────────
+  if(appPhase==="booting")
+    return h("div",{style:{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center"}},h(Spinner));
+  if(appPhase==="auth")
+    return h(AuthScreen);
+  if(appPhase==="onboarding")
+    return h(OnboardingScreen,{onDone:()=>refresh()});
+
   return h("div",null,
+    showProfile&&h(ProfileModal,{
+      settings,
+      userEmail:_session?.user?.email||"",
+      onClose:()=>setShowProfile(false),
+      onSave:()=>{ setShowProfile(false); refresh(); },
+    }),
 
     // Header
     h("div",{style:{marginBottom:"1.5rem"}},
@@ -1369,7 +1606,7 @@ function App(){
           h("div",{style:{fontSize:21,fontWeight:600,color:D.text}},
             new Date(viewDate+"T12:00:00").toLocaleDateString("en-IN",{weekday:"long",day:"numeric",month:"long"})),
           h("div",{style:{fontSize:12,color:D.muted,marginTop:3}},
-            "1,850 kcal · 145g protein · 160g carbs · 55g fat · 30g fiber")
+            `${TARGETS.cal} kcal · ${TARGETS.protein}g protein · ${TARGETS.carbs}g carbs · ${TARGETS.fat}g fat · ${TARGETS.fiber}g fiber`)
         ),
         h("div",{style:{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}},
           // Nutrition streak chip
@@ -1386,17 +1623,18 @@ function App(){
           viewMeals.length===0&&!loading&&viewDate===today&&h("button",{onClick:seedToday,disabled:seeding,
             style:{background:D.accent,color:D.accentText,border:"none",borderRadius:20,padding:"6px 15px",fontSize:12,fontWeight:600,opacity:seeding?0.6:1}},
             seeding?"Logging...":"↑ Sample day"),
-          h("button",{onClick:refresh,style:{background:"transparent",color:D.muted,border:`0.5px solid ${D.border}`,borderRadius:20,padding:"5px 13px",fontSize:13}},"↻")
+          h("button",{onClick:refresh,style:{background:"transparent",color:D.muted,border:`0.5px solid ${D.border}`,borderRadius:20,padding:"5px 13px",fontSize:13}},"↻"),
+          h("button",{onClick:()=>setShowProfile(true),style:{background:"transparent",color:D.muted,border:`0.5px solid ${D.border}`,borderRadius:20,padding:"5px 13px",fontSize:13}},"👤")
         )
       )
     ),
 
-    // Main tab nav — equal-width grid so it never wraps unevenly, and shrinks gracefully
-    h("div",{style:{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:4,marginBottom:"1.5rem"}},
+    // Main tab nav — dynamic columns based on enabled modules
+    h("div",{style:{display:"grid",gridTemplateColumns:`repeat(${tabCount},1fr)`,gap:4,marginBottom:"1.5rem"}},
       h(TabPill,{label:"Summary",  active:mainTab==="summary",  onClick:()=>setMainTab("summary")}),
-      h(TabPill,{label:"Nutrition",active:mainTab==="nutrition",onClick:()=>setMainTab("nutrition")}),
-      h(TabPill,{label:"Activity", active:mainTab==="activity", onClick:()=>setMainTab("activity")}),
-      h(TabPill,{label:"Body",     active:mainTab==="body",     onClick:()=>setMainTab("body")}),
+      trackNutrition&&h(TabPill,{label:"Nutrition",active:mainTab==="nutrition",onClick:()=>setMainTab("nutrition")}),
+      trackActivity &&h(TabPill,{label:"Activity", active:mainTab==="activity", onClick:()=>setMainTab("activity")}),
+      trackBody     &&h(TabPill,{label:"Body",     active:mainTab==="body",     onClick:()=>setMainTab("body")}),
       h(TabPill,{label:"Log",      active:mainTab==="log",      onClick:()=>setMainTab("log")})
     ),
 
@@ -2199,6 +2437,14 @@ function App(){
     // SUMMARY TAB
     // ═══════════════════════════════════════════════════════
     !loading&&mainTab==="summary"&&h("div",{className:"fade"},
+      // Date seeker
+      h("div",{style:{display:"flex",alignItems:"center",gap:8,marginBottom:14}},
+        h("button",{onClick:()=>goDate(-1),style:{background:"transparent",border:`0.5px solid ${D.border}`,color:D.muted,borderRadius:8,padding:"4px 13px",fontSize:16,lineHeight:1}},"‹"),
+        h("input",{type:"date",value:viewDate,max:today,onChange:e=>e.target.value&&setVD(e.target.value),
+          style:{background:D.card,border:`0.5px solid ${D.border}`,color:D.text,borderRadius:8,padding:"5px 10px",fontSize:12,fontFamily:"inherit",flex:1,colorScheme:"dark"}}),
+        viewDate<today&&h("button",{onClick:()=>setVD(today),style:{fontSize:11,padding:"5px 12px",borderRadius:8,background:D.accent,color:D.accentText,border:"none",fontWeight:600,whiteSpace:"nowrap"}},"Today"),
+        h("button",{onClick:()=>goDate(1),disabled:viewDate>=today,style:{background:"transparent",border:`0.5px solid ${D.border}`,color:viewDate>=today?D.hint:D.muted,borderRadius:8,padding:"4px 13px",fontSize:16,lineHeight:1}},"›")
+      ),
       // All 3 streaks
       h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:12}},
         h("div",{style:{...card,marginBottom:0,padding:"0.8rem 0.7rem",borderColor:nutStreak>0?"#3a5a20":D.border}},
@@ -2323,7 +2569,7 @@ function App(){
     ),
 
     h("div",{style:{textAlign:"center",fontSize:11,color:"#2a2a26",marginTop:"1.5rem",paddingBottom:"2rem"}},
-      `Say "log that" in Claude after any meal · /workout in bot to log activity`),
+      "Log meals and workouts · tap any calendar day to see history"),
 
     // Day Detail Modal
     detailDate&&h(DayDetailModal,{
