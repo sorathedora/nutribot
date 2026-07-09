@@ -38,6 +38,7 @@ const SUPABASE_URL = "https://uikwwjmzrrxdvwmyguwv.supabase.co";
 const COACH_ENDPOINT = SUPABASE_URL + "/functions/v1/coach";
 const _sb = supabase.createClient(SUPABASE_URL, ANON_KEY, {auth:{persistSession:true,autoRefreshToken:true}});
 let _session = null;
+const DEV_MODE = ["localhost","127.0.0.1"].includes(window.location.hostname);
 const getHDRS = () => ({ "Content-Type":"application/json", apikey:ANON_KEY, Authorization:"Bearer "+(_session?.access_token||ANON_KEY) });
 const getUserId = () => _session?.user?.id||null;
 
@@ -214,6 +215,45 @@ function Sparkline({series, target, color, height=26}){
     targetY!=null && h("line",{x1:0,y1:targetY,x2:w,y2:targetY,stroke:D.border,strokeWidth:1,strokeDasharray:"3,3"}),
     h("polyline",{points:pts,fill:"none",stroke:color,strokeWidth:1.8,strokeLinejoin:"round",strokeLinecap:"round"}),
     h("circle",{cx:lastX,cy:lastY,r:2.3,fill:color})
+  );
+}
+function StockChart({ vals, target, color, height=72, gradOpacity=0.32, showDates=false, dates=null }){
+  if(!vals||!vals.length) return null;
+  const pairs = vals.map((v,i)=>({i,v})).filter(p=>p.v!=null&&p.v>=0);
+  if(!pairs.length) return null;
+  const W=300, H=height, PAD_T=6, PAD_B=showDates?18:4;
+  const inner=H-PAD_T-PAD_B;
+  const allV=[...pairs.map(p=>p.v), target||0].filter(v=>v>0);
+  const maxV=(allV.length?Math.max(...allV):1)*1.12;
+  const xOf=i=>(vals.length>1?(i/(vals.length-1)):0.5)*W;
+  const yOf=v=>PAD_T+inner-Math.min(v/maxV,1)*inner;
+  const pts=pairs.map(p=>`${xOf(p.i).toFixed(1)},${yOf(p.v).toFixed(1)}`).join(" ");
+  const fx=xOf(pairs[0].i), lx=xOf(pairs[pairs.length-1].i), ly=yOf(pairs[pairs.length-1].v);
+  const fill=`${fx.toFixed(1)},${H+2} `+pts+` ${lx.toFixed(1)},${H+2}`;
+  const tY=target?yOf(target):null;
+  const uid="sc"+color.replace(/[^a-z0-9]/gi,"");
+  const dateL=showDates&&dates&&dates.length>1
+    ?[[dates[0],2,"start"],[dates[Math.floor((dates.length-1)/2)],W/2,"middle"],[dates[dates.length-1],W-2,"end"]]
+    :null;
+  return h("svg",{viewBox:`0 0 ${W} ${H}`,width:"100%",height:H,preserveAspectRatio:"none",style:{display:"block",overflow:"visible"}},
+    h("defs",null,
+      h("linearGradient",{id:uid,x1:"0",y1:"0",x2:"0",y2:"1"},
+        h("stop",{offset:"0%",stopColor:color,stopOpacity:gradOpacity}),
+        h("stop",{offset:"100%",stopColor:color,stopOpacity:0.02})
+      )
+    ),
+    h("polygon",{points:fill,fill:`url(#${uid})`}),
+    tY!=null&&h("g",null,
+      h("line",{x1:0,y1:tY,x2:W,y2:tY,stroke:"#404038",strokeWidth:1,strokeDasharray:"4,3"}),
+      h("text",{x:W-2,y:tY-3,fontSize:7,fill:"#4a4a40",textAnchor:"end",fontFamily:"inherit"},"target")
+    ),
+    h("polyline",{points:pts,fill:"none",stroke:color,strokeWidth:2,strokeLinejoin:"round",strokeLinecap:"round"}),
+    h("circle",{cx:lx,cy:ly,r:3,fill:color,stroke:"#0e0e0c",strokeWidth:1.5}),
+    dateL&&h("g",null,dateL.map(([d,x,anchor])=>
+      h("text",{key:d,x,y:H-3,fontSize:7.5,fill:"#3a3a30",textAnchor:anchor,fontFamily:"inherit"},
+        new Date(d+"T12:00:00").toLocaleDateString("en-IN",{month:"short",day:"numeric"})
+      )
+    ))
   );
 }
 function FigureFrame({h:vbh=120, caption, children}){
@@ -752,7 +792,7 @@ function calcNutStreak(byDate, cheatDays){
 
 function calcActStreak(actByDate, actCheatDays){
   const cheats = actCheatDays || new Set();
-  const isValid = k => cheats.has(k) || (actByDate[k]||[]).some(a=>a.calories_burned>=ACT_MIN);
+  const isValid = k => cheats.has(k) || (actByDate[k]||[]).reduce((s,a)=>s+(a.calories_burned||0),0)>=ACT_MIN;
   const today = todayStr();
   const todayDt = new Date(today+"T12:00:00");
   let streak=0;
@@ -1284,6 +1324,7 @@ function App(){
   const [geminiHist,   setGeminiHist]  = useState([]);
   const [coachInput,   setCoachInput]  = useState("");
   const [coachBusy,    setCoachBusy]   = useState(false);
+  const [trendPeriod,  setTrendPeriod] = useState("30d");
   function flashMsg(msg){ setLogMsg(msg); setTimeout(()=>setLogMsg(null), 3500); }
 
   function legacyCopy(text, onDone){
@@ -1335,12 +1376,21 @@ function App(){
   useEffect(()=>{
     _sb.auth.getSession().then(({data:{session}})=>{
       _session = session;
-      if(!session){ setAppPhase("auth"); return; }
+      if(!session){
+        if(DEV_MODE){
+          _session = {access_token:ANON_KEY, user:{id:null, email:"dev@localhost"}};
+          setAppPhase("app");
+          refresh();
+        } else {
+          setAppPhase("auth");
+        }
+        return;
+      }
       refresh();
     });
     const {data:{subscription}} = _sb.auth.onAuthStateChange((event,session)=>{
       _session = session;
-      if(!session){ setAppPhase("auth"); return; }
+      if(!session){ if(!DEV_MODE) setAppPhase("auth"); return; }
       if(event==="SIGNED_IN"||event==="TOKEN_REFRESHED") refresh();
     });
     return ()=>subscription.unsubscribe();
@@ -1420,13 +1470,13 @@ function App(){
           const nLastCredited = parseInt(sett.streak_milestone_credited||"0");
           if(nMilestoneReached > nLastCredited){
             const nFreezeBal = parseInt(sett.freeze_balance||"0");
-            const nNewBal = Math.min(nFreezeBal + (nMilestoneReached - nLastCredited), BODY_FREEZE_MAX);
+            const nNewBal = Math.min(nFreezeBal + 1, BODY_FREEZE_MAX); // +1 only, never jump multiple
             if(nNewBal > nFreezeBal){
               await apiUpsertSetting("freeze_balance", nNewBal);
               sett.freeze_balance=String(nNewBal);
             }
-            await apiUpsertSetting("streak_milestone_credited", nMilestoneReached);
-            sett.streak_milestone_credited=String(nMilestoneReached);
+            await apiUpsertSetting("streak_milestone_credited", nLastCredited+1); // increment by 1
+            sett.streak_milestone_credited=String(nLastCredited+1);
           }
         }
 
@@ -1438,13 +1488,13 @@ function App(){
           const aLastCredited = parseInt(sett.act_streak_milestone_credited||"0");
           if(aMilestoneReached > aLastCredited){
             const aFreezeBal = parseInt(sett.act_freeze_balance||"0");
-            const aNewBal = Math.min(aFreezeBal + (aMilestoneReached - aLastCredited), BODY_FREEZE_MAX);
+            const aNewBal = Math.min(aFreezeBal + 1, BODY_FREEZE_MAX); // +1 only, never jump multiple
             if(aNewBal > aFreezeBal){
               await apiUpsertSetting("act_freeze_balance", aNewBal);
               sett.act_freeze_balance=String(aNewBal);
             }
-            await apiUpsertSetting("act_streak_milestone_credited", aMilestoneReached);
-            sett.act_streak_milestone_credited=String(aMilestoneReached);
+            await apiUpsertSetting("act_streak_milestone_credited", aLastCredited+1); // increment by 1
+            sett.act_streak_milestone_credited=String(aLastCredited+1);
           }
         }
 
@@ -1461,11 +1511,9 @@ function App(){
 
         // Check onboarding — auto-migrate legacy data silently
         if(sett.onboarded!=="1"){
-          try{ await _sb.rpc("migrate_legacy_data"); }catch{}
-          setAppPhase("onboarding");
-          return;
-        }
-        setAppPhase("app");
+          if(DEV_MODE){ setAppPhase("app"); } // skip onboarding on localhost
+          else { try{ await _sb.rpc("migrate_legacy_data"); }catch{} setAppPhase("onboarding"); return; }
+        } else { setAppPhase("app"); }
       } catch(e){ setError(e.message); }
       finally{ setLoading(false); }
     })();
@@ -1477,10 +1525,10 @@ function App(){
     {cal:0,protein:0,carbs:0,fat:0,fiber:0}),
   [viewMeals]);
 
-  const actTotals = useMemo(()=>({
-    burned: acts.reduce((s,a)=>s+(a.calories_burned||0),0),
-    valid:  acts.filter(a=>(a.calories_burned||0)>=ACT_MIN).length,
-  }),[acts]);
+  const actTotals = useMemo(()=>{
+    const burned = acts.reduce((s,a)=>s+(a.calories_burned||0),0);
+    return { burned, validDay: burned>=ACT_MIN };
+  },[acts]);
 
   const byDate = useMemo(()=>{
     const m={}; history.forEach(x=>{ (m[x.meal_date]=m[x.meal_date]||[]).push(x); }); return m;
@@ -1516,6 +1564,43 @@ function App(){
     const days = Math.min(Math.floor((todayDt-earliestDt)/86400000)+1, 90);
     return Array.from({length:days},(_,i)=>{ const d=new Date(todayDt); d.setDate(d.getDate()-(days-1-i)); return d.toISOString().split("T")[0]; });
   },[bodyByDate]);
+
+  const trendDomain30 = useMemo(()=>{
+    const d=new Date(todayStr()+"T12:00:00");
+    return Array.from({length:30},(_,i)=>{ const x=new Date(d); x.setDate(d.getDate()-(29-i)); return x.toISOString().split("T")[0]; });
+  },[]);
+
+  const activeDomain = useMemo(()=>trendPeriod==="7d"?trendDomain30.slice(-7):trendDomain30,[trendPeriod,trendDomain30]);
+
+  const trendData = useMemo(()=>{
+    const lastWeight=k=>{ const m=measurements.find(x=>x.measured_at<=k); return m?m.weight_kg:null; };
+    return {
+      cal:     activeDomain.map(k=>(byDate[k]||[]).reduce((s,m)=>s+(m.cal||0),0)),
+      protein: activeDomain.map(k=>(byDate[k]||[]).reduce((s,m)=>s+(m.protein||0),0)),
+      burned:  activeDomain.map(k=>(actByDate[k]||[]).reduce((s,a)=>s+(a.calories_burned||0),0)),
+      steps:   activeDomain.map(k=>stepsData[k]||0),
+      weight:  activeDomain.map(k=>lastWeight(k)),
+    };
+  },[activeDomain,byDate,actByDate,stepsData,measurements]);
+
+  const weeklyStats = useMemo(()=>{
+    const slices=[
+      {label:"This week", keys:trendDomain30.slice(23)},
+      {label:"Last week",  keys:trendDomain30.slice(16,23)},
+      {label:"2 wks ago",  keys:trendDomain30.slice(9,16)},
+      {label:"3 wks ago",  keys:trendDomain30.slice(2,9)},
+    ];
+    return slices.map(({label,keys})=>{
+      const active=keys.filter(k=>(byDate[k]||[]).length>0);
+      if(!active.length) return null;
+      const cal=Math.round(active.reduce((s,k)=>s+(byDate[k]||[]).reduce((ss,m)=>ss+(m.cal||0),0),0)/active.length);
+      const protein=Math.round(active.reduce((s,k)=>s+(byDate[k]||[]).reduce((ss,m)=>ss+(m.protein||0),0),0)/active.length);
+      const burned=Math.round(keys.reduce((s,k)=>s+(actByDate[k]||[]).reduce((ss,a)=>ss+(a.calories_burned||0),0),0)/keys.length);
+      return {label,cal,protein,burned,days:active.length};
+    }).filter(Boolean);
+  },[trendDomain30,byDate,actByDate]);
+
+  const weightSeries = useMemo(()=>[...measurements].reverse().map(m=>({date:m.measured_at,w:m.weight_kg})),[measurements]);
 
   async function logBodySet(exercise, value){
     try{ await apiInsertBodySet(viewDate, exercise, value); refresh(); }
@@ -1927,9 +2012,9 @@ STYLE: Concise, warm, practical. Good at Indian food macros. Always metric units
           })
         ),
         h("div",{style:card},
-          h("div",{style:sHead},"7-day average (cheat days excluded)"),
+          h("div",{style:sHead},"7-day average"),
           (()=>{
-            const active=last7.filter(k=>byDate[k]&&!cheatDays.has(k));
+            const active=last7.filter(k=>byDate[k]);
             if(!active.length) return h(Empty,{icon:"📊",text:"Log a few days to see averages."});
             const avg=k=>Math.round(active.reduce((s,d)=>s+byDate[d].reduce((a,m)=>a+(m[k]||0),0),0)/active.length);
             return h(Fragment,null,
@@ -2058,8 +2143,8 @@ STYLE: Concise, warm, practical. Good at Indian food macros. Always metric units
             h("div",{style:{fontSize:11,color:D.muted,marginBottom:4}},"Today's burn"),
             h("div",{style:{fontSize:24,fontWeight:600,color:actTotals.burned>0?COLORS.act:D.muted}},
               actTotals.burned,h("span",{style:{fontSize:12,color:D.muted,fontWeight:400,marginLeft:2}},"kcal")),
-            h("div",{style:{fontSize:11,color:D.muted,marginTop:2}},
-              actTotals.valid>0?`${actTotals.valid} valid activit${actTotals.valid===1?"y":"ies"} ✓`:"No valid activity yet")
+            h("div",{style:{fontSize:11,color:actTotals.validDay?COLORS.act:D.muted,marginTop:2}},
+              actTotals.validDay?"✓ Active day":`${Math.max(ACT_MIN-actTotals.burned,0)} kcal to go`)
           )
         ),
         // Steps today
@@ -2130,7 +2215,7 @@ STYLE: Concise, warm, practical. Good at Indian food macros. Always metric units
           ...last7.map(key=>{
             const burned=(actByDate[key]||[]).reduce((s,a)=>s+(a.calories_burned||0),0);
             const pct=Math.min((burned/Math.max(ACT_GOAL,1))*100,100);
-            const valid=(actByDate[key]||[]).some(a=>a.calories_burned>=ACT_MIN);
+            const valid=(actByDate[key]||[]).reduce((s,a)=>s+(a.calories_burned||0),0)>=ACT_MIN;
             const isToday=key===today;
             const icons=[...new Set((actByDate[key]||[]).map(a=>actIcon(a.activity)))].slice(0,3).join(" ");
             return h("div",{key,style:{display:"flex",alignItems:"center",gap:10,marginBottom:10}},
@@ -2560,6 +2645,32 @@ STYLE: Concise, warm, practical. Good at Indian food macros. Always metric units
         )
       ),
 
+      // Weight log
+      h("div",{style:card},
+        h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}},
+          h("div",{style:sHead},"Weight"),
+          measurements.length>0&&h("span",{style:{fontSize:11,color:D.muted}},
+            `Last: ${measurements[0].weight_kg} kg · ${measurements[0].measured_at}`)
+        ),
+        h("div",{style:{display:"flex",gap:8}},
+          h("input",{
+            type:"number",step:"0.1",placeholder:"kg — log today's weight",
+            value:weightInput,onChange:e=>setWeightInput(e.target.value),
+            style:{flex:1,background:D.surface,border:`0.5px solid ${D.border}`,color:D.text,borderRadius:8,padding:"9px 12px",fontSize:13,fontFamily:"inherit",outline:"none",colorScheme:"dark"},
+          }),
+          h("button",{
+            onClick:async()=>{
+              if(!weightInput) return;
+              setLogBusy(true);
+              try{ await apiLogMeasurement({measured_at:todayStr(),weight_kg:parseFloat(weightInput)}); flashMsg("✓ Weight logged"); setWeightInput(""); refresh(); }
+              catch(e){ setError(e.message); } finally{ setLogBusy(false); }
+            },
+            disabled:logBusy||!weightInput,
+            style:{background:D.accent,color:D.accentText,border:"none",borderRadius:8,padding:"9px 18px",fontSize:13,fontWeight:600,cursor:"pointer",opacity:(!weightInput||logBusy)?0.5:1},
+          },"Log")
+        )
+      ),
+
       h("div",{style:{marginTop:4}},
         h("div",{style:{display:"flex",gap:8,marginBottom:todaySummary?8:0}},
           h("button",{onClick:fetchTodaySummary,disabled:summaryBusy,style:{flex:1,background:D.card,border:`0.5px solid ${D.border}`,color:D.text,borderRadius:8,padding:"9px",fontSize:12,fontWeight:500,opacity:summaryBusy?0.6:1}},
@@ -2592,31 +2703,37 @@ STYLE: Concise, warm, practical. Good at Indian food macros. Always metric units
         viewDate<today&&h("button",{onClick:()=>setVD(today),style:{fontSize:11,padding:"5px 12px",borderRadius:8,background:D.accent,color:D.accentText,border:"none",fontWeight:600,whiteSpace:"nowrap"}},"Today"),
         h("button",{onClick:()=>goDate(1),disabled:viewDate>=today,style:{background:"transparent",border:`0.5px solid ${D.border}`,color:viewDate>=today?D.hint:D.muted,borderRadius:8,padding:"4px 13px",fontSize:16,lineHeight:1}},"›")
       ),
-      // All 3 streaks
-      h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:12}},
+      // Streaks — show body only if user enabled it
+      h("div",{style:{display:"grid",gridTemplateColumns:trackBody?"1fr 1fr 1fr":"1fr 1fr",gap:8,marginBottom:12}},
         h("div",{style:{...card,marginBottom:0,padding:"0.8rem 0.7rem",borderColor:nutStreak>0?"#3a5a20":D.border}},
-          h("div",{style:{fontSize:10,color:D.muted,marginBottom:5}},"🥗 Nutrition"),
-          h("div",{style:{fontSize:21,fontWeight:600,color:nutStreak>0?COLORS.protein:D.muted}},
-            nutStreak,h("span",{style:{fontSize:11,fontWeight:400,color:D.muted,marginLeft:2}},"d")),
-          h("div",{style:{fontSize:10,color:D.muted,marginTop:2}},`❄️${freezeBal}/2`)
+          h("div",{style:{fontSize:10,color:D.muted,marginBottom:3}},"🥗 Nutrition"),
+          h("div",{style:{fontSize:22,fontWeight:600,color:nutStreak>0?COLORS.protein:D.muted}},
+            nutStreak,h("span",{style:{fontSize:10,fontWeight:400,color:D.muted,marginLeft:2}},"d")),
+          h("div",{style:{fontSize:9,color:D.muted,marginTop:1}},
+            nutStreak>0?`${BODY_FREEZE_EVERY-(nutStreak%BODY_FREEZE_EVERY||BODY_FREEZE_EVERY)}d to ❄️`:`❄️ ${freezeBal}/2`)
         ),
         h("div",{style:{...card,marginBottom:0,padding:"0.8rem 0.7rem",borderColor:actStreak>0?"#3a2a5a":D.border}},
-          h("div",{style:{fontSize:10,color:D.muted,marginBottom:5}},"🏃 Activity"),
-          h("div",{style:{fontSize:21,fontWeight:600,color:actStreak>0?COLORS.act:D.muted}},
-            actStreak,h("span",{style:{fontSize:11,fontWeight:400,color:D.muted,marginLeft:2}},"d")),
-          h("div",{style:{fontSize:10,color:D.muted,marginTop:2}},`❄️${actFreezeBal}/2`)
+          h("div",{style:{fontSize:10,color:D.muted,marginBottom:3}},"🏃 Activity"),
+          h("div",{style:{fontSize:22,fontWeight:600,color:actStreak>0?COLORS.act:D.muted}},
+            actStreak,h("span",{style:{fontSize:10,fontWeight:400,color:D.muted,marginLeft:2}},"d")),
+          h("div",{style:{fontSize:9,color:D.muted,marginTop:1}},
+            actStreak>0?`${BODY_FREEZE_EVERY-(actStreak%BODY_FREEZE_EVERY||BODY_FREEZE_EVERY)}d to ❄️`:`❄️ ${actFreezeBal}/2`)
         ),
-        h("div",{style:{...card,marginBottom:0,padding:"0.8rem 0.7rem",borderColor:bodyStreak>0?"#5a4a1a":D.border}},
-          h("div",{style:{fontSize:10,color:D.muted,marginBottom:5}},"💪 Body"),
-          h("div",{style:{fontSize:21,fontWeight:600,color:bodyStreak>0?D.accent:D.muted}},
-            bodyStreak,h("span",{style:{fontSize:11,fontWeight:400,color:D.muted,marginLeft:2}},"d")),
-          h("div",{style:{fontSize:10,color:D.muted,marginTop:2}},`❄️${bodyFreezeBal}/2`)
+        trackBody&&h("div",{style:{...card,marginBottom:0,padding:"0.8rem 0.7rem",borderColor:bodyStreak>0?"#5a4a1a":D.border}},
+          h("div",{style:{fontSize:10,color:D.muted,marginBottom:3}},"💪 Body"),
+          h("div",{style:{fontSize:22,fontWeight:600,color:bodyStreak>0?D.accent:D.muted}},
+            bodyStreak,h("span",{style:{fontSize:10,fontWeight:400,color:D.muted,marginLeft:2}},"d")),
+          h("div",{style:{fontSize:9,color:D.muted,marginTop:1}},
+            bodyStreak>0?`${BODY_FREEZE_EVERY-(bodyStreak%BODY_FREEZE_EVERY||BODY_FREEZE_EVERY)}d to ❄️`:`❄️ ${bodyFreezeBal}/2`)
         )
       ),
 
-      // Macro rings — with clear consumed / target / left under each
+      // Macro rings
       h("div",{style:{...card,padding:"1.25rem 1rem"}},
-        h("div",{style:{...sHead,marginBottom:14}},"Today — nutrition"),
+        h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}},
+          h("div",{style:sHead},viewDate===today?"Today — nutrition":`${fmtDate(viewDate)} — nutrition`),
+          viewMeals.length>0&&h("span",{style:{fontSize:10,color:D.muted}},`${viewMeals.length} meal${viewMeals.length!==1?"s":""}`)
+        ),
         h("div",{style:{display:"flex",justifyContent:"space-around",gap:4}},
           ...[
             {key:"cal",    label:"Cal",   unit:"kcal",color:COLORS.cal,    track:COLORS.calBg},
@@ -2643,61 +2760,104 @@ STYLE: Concise, warm, practical. Good at Indian food macros. Always metric units
       ),
 
       // Activity summary
-      h("div",{style:card},
-        h("div",{style:{...sHead,marginBottom:12}},"Today — activity"),
+      trackActivity&&h("div",{style:card},
+        h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}},
+          h("div",{style:sHead},viewDate===today?"Today — activity":`${fmtDate(viewDate)} — activity`),
+          actTotals.burned>0&&h("span",{style:{fontSize:11,fontWeight:500,color:actTotals.validDay?COLORS.act:D.muted}},
+            `${actTotals.burned} kcal${actTotals.validDay?" ✓":""}`)
+        ),
         acts.length===0
-          ?h("div",{style:{fontSize:13,color:D.muted,padding:"8px 0"}},"No activities logged today.")
+          ?h("div",{style:{fontSize:13,color:D.muted,padding:"4px 0"}},viewDate===today?"No activities logged today.":"No activities on this day.")
           :h("div",null,
-              acts.map((a,i)=>h("div",{key:a.id||i,style:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"6px 0",borderBottom:i<acts.length-1?`0.5px solid ${D.border}`:"none"}},
+              acts.map((a,i)=>h("div",{key:a.id||i,style:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"5px 0",borderBottom:i<acts.length-1?`0.5px solid ${D.border}`:"none"}},
                 h("div",{style:{display:"flex",alignItems:"center",gap:8}},
-                  h("span",{style:{fontSize:16}},actIcon(a.activity)),
+                  h("span",{style:{fontSize:15}},actIcon(a.activity)),
                   h("span",{style:{fontSize:13,color:D.text}},
                     a.activity.charAt(0).toUpperCase()+a.activity.slice(1),
-                    h("span",{style:{fontSize:11,color:D.muted,marginLeft:6}},`${a.duration_minutes}min · ${a.intensity}`)
+                    h("span",{style:{fontSize:11,color:D.muted,marginLeft:6}},`${a.duration_minutes}m · ${a.intensity}`)
                   )
                 ),
-                h("span",{style:{fontSize:13,fontWeight:500,color:(a.calories_burned||0)>=ACT_MIN?COLORS.act:D.muted}},
-                  `${a.calories_burned} kcal`)
-              ))
+                h("span",{style:{fontSize:12,fontWeight:500,color:D.muted}},`${a.calories_burned} kcal`)
+              )),
+            !actTotals.validDay&&actTotals.burned>0&&h("div",{style:{fontSize:11,color:D.muted,marginTop:8,paddingTop:8,borderTop:`0.5px solid ${D.border}`}},
+              `${ACT_MIN-actTotals.burned} more kcal needed for a valid activity day`)
           )
       ),
 
-      // Body Goals summary
-      h("div",{style:card},
-        h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}},
-          h("div",{style:{...sHead,marginBottom:0}},"Today — body goals"),
-          h("span",{style:{fontSize:11,color:D.muted}},WEEK_BLOCKS[blockIndex].label)
+      // Body Goals summary — only if user opted in
+      trackBody&&h("div",{style:card},
+        h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}},
+          h("div",{style:{...sHead,marginBottom:0}},viewDate===today?"Today — body goals":`${fmtDate(viewDate)} — body goals`),
+          h("span",{style:{fontSize:10,color:D.muted}},WEEK_BLOCKS[blockIndex].tag)
         ),
-        h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center"}},
-          h("div",{style:{fontSize:22,fontWeight:600,color:viewBodyCompletion>=BODY_GOOD_DAY_PCT?D.accent:D.text}},
-            Math.round(viewBodyCompletion*100),h("span",{style:{fontSize:12,color:D.muted,fontWeight:400,marginLeft:2}},"% complete")),
-          h("div",{style:{fontSize:11,color:D.muted,textAlign:"right"}},
-            `💪 ${bodyStreak}d streak`,h("br"),`🆙 ${PULLUP_STAGES[pullupStageIndex].label}`)
-        )
+        (()=>{
+          const activeEx = Object.entries(currentTargets).filter(([,t])=>t>0);
+          const doneEx = activeEx.filter(([ex])=>(viewBodyTotals[ex]||0)>=currentTargets[ex]);
+          const pct = Math.round(viewBodyCompletion*100);
+          return h("div",{style:{display:"flex",alignItems:"center",gap:14}},
+            h("div",null,
+              h("div",{style:{fontSize:22,fontWeight:600,color:viewBodyCompletion>=BODY_GOOD_DAY_PCT?D.accent:D.text}},
+                pct,h("span",{style:{fontSize:12,color:D.muted,fontWeight:400,marginLeft:2}},"%")),
+              h("div",{style:{fontSize:11,color:D.muted,marginTop:2}},
+                `${doneEx.length}/${activeEx.length} exercises done`)
+            ),
+            h("div",{style:{flex:1,height:5,background:D.hint,borderRadius:3,overflow:"hidden"}},
+              h("div",{style:{width:`${pct}%`,height:"100%",background:viewBodyCompletion>=BODY_GOOD_DAY_PCT?D.accent:"#6a5020",borderRadius:3,transition:"width 0.6s"}})),
+          );
+        })()
       ),
 
-      // Net calories card
+      // Energy balance card
       (()=>{
         const net = Math.round(totals.cal - actTotals.burned);
-        const netColor = net > TARGETS.cal ? "#ff9f43" : net < TARGETS.cal * 0.5 ? COLORS.protein : COLORS.cal;
-        return h("div",{style:{...card,display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}},
-          h("div",{style:{textAlign:"center"}},
-            h("div",{style:{fontSize:11,color:D.muted,marginBottom:4}},"Consumed"),
-            h("div",{style:{fontSize:18,fontWeight:600,color:COLORS.cal}},Math.round(totals.cal)),
-            h("div",{style:{fontSize:10,color:D.muted}},"kcal")
-          ),
-          h("div",{style:{textAlign:"center",borderLeft:`0.5px solid ${D.border}`,borderRight:`0.5px solid ${D.border}`}},
-            h("div",{style:{fontSize:11,color:D.muted,marginBottom:4}},"Burned"),
-            h("div",{style:{fontSize:18,fontWeight:600,color:COLORS.act}},actTotals.burned),
-            h("div",{style:{fontSize:10,color:D.muted}},"kcal")
-          ),
-          h("div",{style:{textAlign:"center"}},
-            h("div",{style:{fontSize:11,color:D.muted,marginBottom:4}},"Net"),
-            h("div",{style:{fontSize:18,fontWeight:600,color:netColor}},net),
-            h("div",{style:{fontSize:10,color:D.muted}},"kcal")
+        const surplus = net - TARGETS.cal;
+        const netColor = surplus > 200 ? "#ff9f43" : surplus < -300 ? COLORS.protein : COLORS.cal;
+        const latestWeight = measurements[0]?.weight_kg;
+        const cols = latestWeight ? "1fr 1fr 1fr 1fr" : "1fr 1fr 1fr";
+        return h("div",{style:card},
+          h("div",{style:{...sHead,marginBottom:10}},"Energy balance"),
+          h("div",{style:{display:"grid",gridTemplateColumns:cols,gap:4,textAlign:"center"}},
+            h("div",null,
+              h("div",{style:{fontSize:9,color:D.muted,marginBottom:3,textTransform:"uppercase",letterSpacing:"0.05em"}},"Eaten"),
+              h("div",{style:{fontSize:17,fontWeight:600,color:COLORS.cal}},Math.round(totals.cal)),
+              h("div",{style:{fontSize:9,color:D.muted}},"kcal")
+            ),
+            h("div",{style:{borderLeft:`0.5px solid ${D.border}`}},
+              h("div",{style:{fontSize:9,color:D.muted,marginBottom:3,textTransform:"uppercase",letterSpacing:"0.05em"}},"Burned"),
+              h("div",{style:{fontSize:17,fontWeight:600,color:COLORS.act}},actTotals.burned),
+              h("div",{style:{fontSize:9,color:D.muted}},"kcal")
+            ),
+            h("div",{style:{borderLeft:`0.5px solid ${D.border}`}},
+              h("div",{style:{fontSize:9,color:D.muted,marginBottom:3,textTransform:"uppercase",letterSpacing:"0.05em"}},"Net"),
+              h("div",{style:{fontSize:17,fontWeight:600,color:netColor}},net),
+              h("div",{style:{fontSize:9,color:surplus>0?"#ff9f43":COLORS.protein}},surplus>0?`+${surplus}`:surplus<0?`${surplus}`:"on target")
+            ),
+            latestWeight&&h("div",{style:{borderLeft:`0.5px solid ${D.border}`}},
+              h("div",{style:{fontSize:9,color:D.muted,marginBottom:3,textTransform:"uppercase",letterSpacing:"0.05em"}},"Weight"),
+              h("div",{style:{fontSize:17,fontWeight:600,color:D.text}},latestWeight),
+              h("div",{style:{fontSize:9,color:D.muted}},"kg")
+            )
           )
         );
       })(),
+
+      // Weekly averages
+      weeklyStats.length>0&&h("div",{style:card},
+        h("div",{style:{...sHead,marginBottom:10}},"Weekly averages"),
+        h("div",{style:{display:"grid",gridTemplateColumns:"auto 1fr 1fr 1fr",gap:"6px 10px",alignItems:"center"}},
+          h("div",{style:{fontSize:9,color:D.hint}},""),
+          h("div",{style:{fontSize:9,color:D.muted,textAlign:"center",textTransform:"uppercase",letterSpacing:"0.04em"}},"Cal"),
+          h("div",{style:{fontSize:9,color:D.muted,textAlign:"center",textTransform:"uppercase",letterSpacing:"0.04em"}},"Protein"),
+          h("div",{style:{fontSize:9,color:D.muted,textAlign:"center",textTransform:"uppercase",letterSpacing:"0.04em"}},"Burned"),
+          ...weeklyStats.map(({label,cal,protein,burned,days})=>[
+            h("div",{key:label+"l",style:{fontSize:10,color:D.muted,whiteSpace:"nowrap"}},label),
+            h("div",{key:label+"c",style:{fontSize:11,fontWeight:500,color:cal>=TARGETS.cal*0.85?COLORS.cal:D.muted,textAlign:"center"}},cal||"—"),
+            h("div",{key:label+"p",style:{fontSize:11,fontWeight:500,color:protein>=TARGETS.protein*0.85?COLORS.protein:D.muted,textAlign:"center"}},protein||"—"),
+            h("div",{key:label+"b",style:{fontSize:11,fontWeight:500,color:burned>=ACT_MIN?COLORS.act:D.muted,textAlign:"center"}},burned||"—"),
+          ]).flat()
+        ),
+        h("div",{style:{fontSize:9,color:D.hint,marginTop:8}},"Nutrition avg on logged days only · Activity avg across all days")
+      ),
 
       // Meal list (compact)
       viewMeals.length>0&&h("div",{style:card},
@@ -2711,6 +2871,87 @@ STYLE: Concise, warm, practical. Good at Indian food macros. Always metric units
             ),
             h("span",{style:{fontSize:11,color:D.muted,flexShrink:0,marginLeft:8}},displayTime(m.meal_time))
           )
+        )
+      ),
+
+      // Trend charts (30d / 7d toggle)
+      h("div",{style:card},
+        h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}},
+          h("div",{style:sHead},trendPeriod==="7d"?"7-day trends":"30-day trends"),
+          h("div",{style:{display:"flex",gap:4,alignItems:"center"}},
+            h("div",{style:{display:"flex",background:"#1a1a16",borderRadius:6,padding:2,gap:2}},
+              ["30d","7d"].map(p=>h("button",{key:p,onClick:()=>setTrendPeriod(p),style:{
+                fontSize:10,fontWeight:600,padding:"3px 10px",borderRadius:4,border:"none",cursor:"pointer",
+                background:trendPeriod===p?"#2c2c28":"transparent",
+                color:trendPeriod===p?D.text:D.muted,letterSpacing:"0.03em",transition:"all 0.15s"
+              }},p))
+            ),
+            h("button",{onClick:async()=>{
+              const period=trendPeriod==="7d"?"7 days":"30 days";
+              const d0=activeDomain[0], dN=activeDomain[activeDomain.length-1];
+              const fmt=d=>new Date(d+"T12:00:00").toLocaleDateString("en-IN",{month:"short",day:"numeric"});
+              const nonZeroAvg=arr=>{ const v=arr.filter(x=>x>0); return v.length?Math.round(v.reduce((s,x)=>s+x,0)/v.length):0; };
+              const lines=[
+                `NutriTrack — ${period} (${fmt(d0)}–${fmt(dN)})`,
+                `Calories  avg ${nonZeroAvg(trendData.cal)} kcal  (target ${TARGETS.cal})`,
+                `Protein   avg ${nonZeroAvg(trendData.protein)}g  (target ${TARGETS.protein}g)`,
+                `Burned    avg ${nonZeroAvg(trendData.burned)} kcal  (target ${ACT_GOAL})`,
+              ];
+              if(trendData.steps.some(v=>v>0)) lines.push(`Steps     avg ${nonZeroAvg(trendData.steps).toLocaleString()}  (target ${STEP_TARGET.toLocaleString()})`);
+              const wVals=trendData.weight.filter(v=>v!=null);
+              if(wVals.length>=2){ const delta=wVals[wVals.length-1]-wVals[0]; lines.push(`Weight    ${wVals[wVals.length-1]}kg  (${delta>=0?"+":""}${delta.toFixed(1)}kg in period)`); }
+              const text=lines.join("\n");
+              try{ await navigator.clipboard.writeText(text); flashMsg("✓ Copied"); }
+              catch{ legacyCopy(text,()=>flashMsg("✓ Copied")); }
+            },style:{
+              fontSize:10,fontWeight:500,padding:"4px 10px",borderRadius:6,border:`1px solid ${D.border}`,
+              cursor:"pointer",background:"transparent",color:D.muted,letterSpacing:"0.03em"
+            }},"Export")
+          )
+        ),
+        h("div",{style:{display:"flex",flexDirection:"column",gap:20}},
+          ...[
+            {key:"cal",    label:"Calories",  color:COLORS.cal,    target:TARGETS.cal,    unit:"kcal"},
+            {key:"protein",label:"Protein",   color:COLORS.protein,target:TARGETS.protein,unit:"g"},
+            {key:"burned", label:"Burned",    color:COLORS.act,    target:ACT_GOAL,       unit:"kcal"},
+            {key:"steps",  label:"Steps",     color:"#60a5fa",     target:STEP_TARGET,    unit:"steps"},
+          ].map(({key,label,color,target,unit})=>{
+            const vals=trendData[key];
+            const nonZero=vals.filter(v=>v>0);
+            if(!nonZero.length) return null;
+            const avg=Math.round(nonZero.reduce((s,v)=>s+v,0)/nonZero.length);
+            const last=vals[vals.length-1]||0;
+            const fmtVal=v=>unit==="steps"?v.toLocaleString():v;
+            return h("div",{key},
+              h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:6}},
+                h("span",{style:{fontSize:11,fontWeight:500,color:D.muted,letterSpacing:"0.04em",textTransform:"uppercase"}},label),
+                h("span",{style:{fontSize:11}},
+                  h("span",{style:{color,fontWeight:600,fontSize:13}},fmtVal(last)),
+                  h("span",{style:{marginLeft:8,fontSize:10,color:"#3a3a32"}},`avg ${fmtVal(avg)} ${unit==="kcal"?"kcal":unit==="steps"?"steps":"g"}`)
+                )
+              ),
+              h(StockChart,{vals,target,color,height:68,showDates:true,dates:activeDomain})
+            );
+          }).filter(Boolean),
+          (()=>{
+            const wVals=trendData.weight;
+            const defined=wVals.filter(v=>v!=null);
+            if(defined.length<2) return null;
+            const last=defined[defined.length-1];
+            const first=defined[0];
+            const delta=last-first;
+            return h("div",null,
+              h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:6}},
+                h("span",{style:{fontSize:11,fontWeight:500,color:D.muted,letterSpacing:"0.04em",textTransform:"uppercase"}},"Weight"),
+                h("span",{style:{fontSize:11}},
+                  h("span",{style:{color:"#94a3b8",fontWeight:600,fontSize:13}},last+" kg"),
+                  h("span",{style:{marginLeft:8,fontSize:10,color:delta<0?"#8ec94a":delta>0?"#d97aaa":"#3a3a32"}},
+                    (delta>=0?"+":"")+delta.toFixed(1)+"kg in period")
+                )
+              ),
+              h(StockChart,{vals:wVals,target:null,color:"#94a3b8",height:68,gradOpacity:0.2,showDates:true,dates:activeDomain})
+            );
+          })()
         )
       )
     ),
