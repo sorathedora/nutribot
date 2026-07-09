@@ -157,7 +157,7 @@ const DAILY_SCHEDULE = [
 const BODY_GOOD_DAY_PCT = 0.75;   // day counts as "good" at >=75% average completion
 const BODY_ADVANCE_PCT  = 0.80;   // day counts toward block-advancement at >=80%
 const BODY_ADVANCE_DAYS = 5;      // need >=5 such days in the trailing 7 to advance a block
-const BODY_FREEZE_EVERY = 6;
+const BODY_FREEZE_EVERY = 5;
 const BODY_FREEZE_MAX   = 2;
 
 // ── Body Goals: lightweight pseudo-3D figure renderer ───────────
@@ -790,6 +790,33 @@ function calcNutStreak(byDate, cheatDays){
   return streak;
 }
 
+function calcNutActiveStreak(byDate){
+  // Like calcNutStreak but cheat days do NOT count — only real logged good days
+  const GOOD_PRO = TARGETS.protein * 0.6;
+  const isActiveGood = k => { const m=byDate[k]||[]; return m.length>=2 && m.reduce((s,x)=>s+(x.protein||0),0)>=GOOD_PRO; };
+  const today=todayStr(), todayDt=new Date(today+"T12:00:00");
+  let streak=0;
+  const startI=isActiveGood(today)?0:1;
+  for(let i=startI;i<90;i++){
+    const d=new Date(todayDt); d.setDate(d.getDate()-i);
+    const k=d.toISOString().split("T")[0];
+    if(isActiveGood(k)) streak++; else break;
+  }
+  return streak;
+}
+function calcActActiveStreak(actByDate){
+  // Like calcActStreak but rest days do NOT count — only real burned ≥ ACT_MIN days
+  const isActive=k=>(actByDate[k]||[]).reduce((s,a)=>s+(a.calories_burned||0),0)>=ACT_MIN;
+  const today=todayStr(), todayDt=new Date(today+"T12:00:00");
+  let streak=0;
+  const startI=isActive(today)?0:1;
+  for(let i=startI;i<90;i++){
+    const d=new Date(todayDt); d.setDate(d.getDate()-i);
+    const k=d.toISOString().split("T")[0];
+    if(isActive(k)) streak++; else break;
+  }
+  return streak;
+}
 function calcActStreak(actByDate, actCheatDays){
   const cheats = actCheatDays || new Set();
   const isValid = k => cheats.has(k) || (actByDate[k]||[]).reduce((s,a)=>s+(a.calories_burned||0),0)>=ACT_MIN;
@@ -1464,7 +1491,7 @@ function App(){
 
         // ── Nutrition streak: mirrors bot.py check_and_credit_freezes ──
         const nutByDate={}; histM.forEach(x=>{ (nutByDate[x.meal_date]=nutByDate[x.meal_date]||[]).push(x); });
-        const nStreak = calcNutStreak(nutByDate, cd);
+        const nStreak = calcNutActiveStreak(nutByDate); // active days only — cheat days don't earn freezes
         const nMilestoneReached = Math.floor(nStreak / BODY_FREEZE_EVERY);
         if(nMilestoneReached > 0){
           const nLastCredited = parseInt(sett.streak_milestone_credited||"0");
@@ -1482,7 +1509,7 @@ function App(){
 
         // ── Activity streak: mirrors bot.py check_and_credit_act_freezes ──
         const aByDate={}; histA.forEach(a=>{ (aByDate[a.activity_date]=aByDate[a.activity_date]||[]).push(a); });
-        const aStreak = calcActStreak(aByDate, actCd);
+        const aStreak = calcActActiveStreak(aByDate); // active days only — rest days don't earn freezes
         const aMilestoneReached = Math.floor(aStreak / BODY_FREEZE_EVERY);
         if(aMilestoneReached > 0){
           const aLastCredited = parseInt(sett.act_streak_milestone_credited||"0");
@@ -1574,9 +1601,13 @@ function App(){
 
   const trendData = useMemo(()=>{
     const lastWeight=k=>{ const m=measurements.find(x=>x.measured_at<=k); return m?m.weight_kg:null; };
+    const macro=(key)=>activeDomain.map(k=>(byDate[k]||[]).reduce((s,m)=>s+(m[key]||0),0));
     return {
-      cal:     activeDomain.map(k=>(byDate[k]||[]).reduce((s,m)=>s+(m.cal||0),0)),
-      protein: activeDomain.map(k=>(byDate[k]||[]).reduce((s,m)=>s+(m.protein||0),0)),
+      cal:     macro("cal"),
+      protein: macro("protein"),
+      carbs:   macro("carbs"),
+      fat:     macro("fat"),
+      fiber:   macro("fiber"),
       burned:  activeDomain.map(k=>(actByDate[k]||[]).reduce((s,a)=>s+(a.calories_burned||0),0)),
       steps:   activeDomain.map(k=>stepsData[k]||0),
       weight:  activeDomain.map(k=>lastWeight(k)),
@@ -1591,12 +1622,12 @@ function App(){
       {label:"3 wks ago",  keys:trendDomain30.slice(2,9)},
     ];
     return slices.map(({label,keys})=>{
-      const active=keys.filter(k=>(byDate[k]||[]).length>0);
-      if(!active.length) return null;
-      const cal=Math.round(active.reduce((s,k)=>s+(byDate[k]||[]).reduce((ss,m)=>ss+(m.cal||0),0),0)/active.length);
-      const protein=Math.round(active.reduce((s,k)=>s+(byDate[k]||[]).reduce((ss,m)=>ss+(m.protein||0),0),0)/active.length);
+      if(!keys.some(k=>(byDate[k]||[]).length>0)) return null; // skip entirely empty weeks
+      const sum=k=>macro=>keys.reduce((s,d)=>s+(byDate[d]||[]).reduce((a,m)=>a+(m[macro]||0),0),0);
+      const cal=Math.round(sum(keys)("cal")/keys.length);
+      const protein=Math.round(sum(keys)("protein")/keys.length);
       const burned=Math.round(keys.reduce((s,k)=>s+(actByDate[k]||[]).reduce((ss,a)=>ss+(a.calories_burned||0),0),0)/keys.length);
-      return {label,cal,protein,burned,days:active.length};
+      return {label,cal,protein,burned};
     }).filter(Boolean);
   },[trendDomain30,byDate,actByDate]);
 
@@ -1657,8 +1688,20 @@ function App(){
     const isCheat = cheatDays.has(viewDate);
     if(!isCheat && freezeBal<=0){ flashMsg("❌ No nutrition freezes available."); return; }
     try{
-      if(isCheat){ await apiRemoveCheatDay(viewDate); flashMsg("Cheat day removed"); }
-      else{ await apiAddCheatDay(viewDate); flashMsg("❄️ Cheat day activated"); }
+      if(isCheat){
+        await apiRemoveCheatDay(viewDate);
+        await apiUpsertSetting("freeze_balance", Math.min(freezeBal+1, BODY_FREEZE_MAX));
+        // Refunding: restore milestone counter so refunded freeze can be re-earned correctly
+        const credited = parseInt(settings.streak_milestone_credited||"0");
+        if(credited>0) await apiUpsertSetting("streak_milestone_credited", credited-1);
+        flashMsg("Cheat day removed — freeze refunded");
+      } else{
+        await apiAddCheatDay(viewDate);
+        await apiUpsertSetting("freeze_balance", freezeBal-1);
+        // Reset milestone counter so user must earn 5 fresh active days for next freeze
+        await apiUpsertSetting("streak_milestone_credited", 0);
+        flashMsg("❄️ Cheat day activated");
+      }
       refresh();
     } catch(e){ setError(e.message); }
   }
@@ -1666,8 +1709,18 @@ function App(){
     const isCheat = actCheatDays.has(viewDate);
     if(!isCheat && actFreezeBal<=0){ flashMsg("❌ No activity freezes available."); return; }
     try{
-      if(isCheat){ await apiRemoveActCheatDay(viewDate); flashMsg("Activity rest day removed"); }
-      else{ await apiAddActCheatDay(viewDate); flashMsg("❄️ Activity rest day activated"); }
+      if(isCheat){
+        await apiRemoveActCheatDay(viewDate);
+        await apiUpsertSetting("act_freeze_balance", Math.min(actFreezeBal+1, BODY_FREEZE_MAX));
+        const aCredited = parseInt(settings.act_streak_milestone_credited||"0");
+        if(aCredited>0) await apiUpsertSetting("act_streak_milestone_credited", aCredited-1);
+        flashMsg("Rest day removed — freeze refunded");
+      } else{
+        await apiAddActCheatDay(viewDate);
+        await apiUpsertSetting("act_freeze_balance", actFreezeBal-1);
+        await apiUpsertSetting("act_streak_milestone_credited", 0);
+        flashMsg("❄️ Activity rest day activated");
+      }
       refresh();
     } catch(e){ setError(e.message); }
   }
@@ -2012,11 +2065,11 @@ STYLE: Concise, warm, practical. Good at Indian food macros. Always metric units
           })
         ),
         h("div",{style:card},
-          h("div",{style:sHead},"7-day average"),
+          h("div",{style:sHead},"7-day average (all days)"),
           (()=>{
-            const active=last7.filter(k=>byDate[k]);
-            if(!active.length) return h(Empty,{icon:"📊",text:"Log a few days to see averages."});
-            const avg=k=>Math.round(active.reduce((s,d)=>s+byDate[d].reduce((a,m)=>a+(m[k]||0),0),0)/active.length);
+            const hasAny=last7.some(k=>byDate[k]);
+            if(!hasAny) return h(Empty,{icon:"📊",text:"Log a few days to see averages."});
+            const avg=k=>Math.round(last7.reduce((s,d)=>s+(byDate[d]||[]).reduce((a,m)=>a+(m[k]||0),0),0)/last7.length);
             return h(Fragment,null,
               h(Bar,{label:"Calories",value:avg("cal"),    target:TARGETS.cal,    color:COLORS.cal}),
               h(Bar,{label:"Protein", value:avg("protein"),target:TARGETS.protein,color:COLORS.protein}),
@@ -2890,14 +2943,17 @@ STYLE: Concise, warm, practical. Good at Indian food macros. Always metric units
               const period=trendPeriod==="7d"?"7 days":"30 days";
               const d0=activeDomain[0], dN=activeDomain[activeDomain.length-1];
               const fmt=d=>new Date(d+"T12:00:00").toLocaleDateString("en-IN",{month:"short",day:"numeric"});
-              const nonZeroAvg=arr=>{ const v=arr.filter(x=>x>0); return v.length?Math.round(v.reduce((s,x)=>s+x,0)/v.length):0; };
+              const avg=arr=>Math.round(arr.reduce((s,v)=>s+(v||0),0)/arr.length);
               const lines=[
                 `NutriTrack — ${period} (${fmt(d0)}–${fmt(dN)})`,
-                `Calories  avg ${nonZeroAvg(trendData.cal)} kcal  (target ${TARGETS.cal})`,
-                `Protein   avg ${nonZeroAvg(trendData.protein)}g  (target ${TARGETS.protein}g)`,
-                `Burned    avg ${nonZeroAvg(trendData.burned)} kcal  (target ${ACT_GOAL})`,
+                `Calories  avg ${avg(trendData.cal)} kcal  (target ${TARGETS.cal})`,
+                `Protein   avg ${avg(trendData.protein)}g  (target ${TARGETS.protein}g)`,
+                `Carbs     avg ${avg(trendData.carbs)}g  (target ${TARGETS.carbs}g)`,
+                `Fat       avg ${avg(trendData.fat)}g  (target ${TARGETS.fat}g)`,
+                `Fiber     avg ${avg(trendData.fiber)}g  (target ${TARGETS.fiber}g)`,
+                `Burned    avg ${avg(trendData.burned)} kcal  (target ${ACT_GOAL})`,
               ];
-              if(trendData.steps.some(v=>v>0)) lines.push(`Steps     avg ${nonZeroAvg(trendData.steps).toLocaleString()}  (target ${STEP_TARGET.toLocaleString()})`);
+              if(trendData.steps.some(v=>v>0)) lines.push(`Steps     avg ${avg(trendData.steps).toLocaleString()}  (target ${STEP_TARGET.toLocaleString()})`);
               const wVals=trendData.weight.filter(v=>v!=null);
               if(wVals.length>=2){ const delta=wVals[wVals.length-1]-wVals[0]; lines.push(`Weight    ${wVals[wVals.length-1]}kg  (${delta>=0?"+":""}${delta.toFixed(1)}kg in period)`); }
               const text=lines.join("\n");
@@ -2913,13 +2969,16 @@ STYLE: Concise, warm, practical. Good at Indian food macros. Always metric units
           ...[
             {key:"cal",    label:"Calories",  color:COLORS.cal,    target:TARGETS.cal,    unit:"kcal"},
             {key:"protein",label:"Protein",   color:COLORS.protein,target:TARGETS.protein,unit:"g"},
+            {key:"carbs",  label:"Carbs",     color:COLORS.carbs,  target:TARGETS.carbs,  unit:"g"},
+            {key:"fat",    label:"Fat",       color:COLORS.fat,    target:TARGETS.fat,    unit:"g"},
+            {key:"fiber",  label:"Fiber",     color:COLORS.fiber,  target:TARGETS.fiber,  unit:"g"},
             {key:"burned", label:"Burned",    color:COLORS.act,    target:ACT_GOAL,       unit:"kcal"},
             {key:"steps",  label:"Steps",     color:"#60a5fa",     target:STEP_TARGET,    unit:"steps"},
           ].map(({key,label,color,target,unit})=>{
             const vals=trendData[key];
-            const nonZero=vals.filter(v=>v>0);
-            if(!nonZero.length) return null;
-            const avg=Math.round(nonZero.reduce((s,v)=>s+v,0)/nonZero.length);
+            const hasData=vals.some(v=>v>0);
+            if(!hasData) return null;
+            const avg=Math.round(vals.reduce((s,v)=>s+(v||0),0)/vals.length);
             const last=vals[vals.length-1]||0;
             const fmtVal=v=>unit==="steps"?v.toLocaleString():v;
             return h("div",{key},
